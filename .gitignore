@@ -67,3 +67,7 @@ node_modules/
 
 # dataconnect generated files
 .dataconnect
+
+# Firebase service account key file
+# This file should not be committed to version control as it contains sensitive information.
+firebase-key.json

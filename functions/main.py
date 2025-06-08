@@ -1,5 +1,5 @@
-from tensorflow.keras.models import load_model
-from tensorflow.keras.preprocessing import image
+from tensorflow.keras.models import load_model # type: ignore
+from tensorflow.keras.preprocessing import image # type: ignore
 import numpy as np
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -8,9 +8,23 @@ import json
 import os
 from datetime import datetime
 import requests
+import firebase_admin
+from firebase_admin import credentials, firestore
+import uuid
 
+# Initialize Flask app
 app = Flask(__name__)
 CORS(app)
+
+# Initialize Firebase App
+cred = credentials.Certificate("firebase-key.json")
+firebase_admin.initialize_app(cred)
+
+# Firestore DB client
+db = firestore.client()
+
+
+#testmessage
 
 disease_model = load_model("models/plant_disease_model.keras") #Model loaded
 
@@ -152,43 +166,34 @@ def analyze_symptoms():
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500
-
+    
+    
 @app.route('/analyze_image', methods=['POST'])
 def analyze_image():
     try:
-        image_url = request.json.get('image_url')
-        user_id = request.json.get('user_id', 'user1')
+        if 'image' not in request.files:
+            return jsonify({'error': 'No image file provided'}), 400
 
-        if not image_url:
-            return jsonify({'error': 'No image URL provided'}), 400
+        image_file = request.files['image']
+        if image_file.filename == '':
+            return jsonify({'error': 'Empty filename'}), 400
 
-        # Download image to disk or memory
         image_path = 'temp_image.jpg'
-        response = requests.get(image_url)
-        if response.status_code != 200:
-            return jsonify({'error': 'Failed to download image'}), 400
-        img_data = response.content
-
-        with open(image_path, 'wb') as f:
-            f.write(img_data)
+        image_file.save(image_path)
 
         # Predict using your model
         input_img = preprocess_image(image_path)
         prediction = disease_model.predict(input_img)
 
-        CLASS_NAMES = list(FRIENDLY_LABELS.keys())  # Preserves order
-
+        CLASS_NAMES = list(FRIENDLY_LABELS.keys())
         predicted_index = np.argmax(prediction)
         predicted_key = CLASS_NAMES[predicted_index]
         predicted_label = FRIENDLY_LABELS[predicted_key]
 
-
-        # Now let Gemini explain the label
         prompt = f"""
         A plant has been detected with the disease: {predicted_label}.
         Please explain what this disease is, how it affects the plant, and how a farmer can treat or prevent it.
         """
-
         model = genai.GenerativeModel('gemini-1.5-flash')
         response = model.generate_content(prompt)
 
@@ -200,6 +205,7 @@ def analyze_image():
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
 
 
 @app.route('/history/<user_id>', methods=['GET'])
@@ -241,15 +247,79 @@ def health():
         'consultations': sum(len(v) for v in user_consultations.values())
     })
 
+@app.route('/addCrop', methods=['POST'])
+def add_crop():
+    try:
+        data = request.get_json()
+        user_id = data.get('userId')
+        crop_data = data.get('cropData')
+        if not user_id or not crop_data:
+            return jsonify({"error": "Missing userId or cropData"}), 400
+
+        crop_id = str(uuid.uuid4())
+        crop_data["timestamp"] = datetime.now()
+
+        db.collection("users").document(user_id).collection("crops").document(crop_id).set(crop_data)
+
+        return jsonify({"message": "Crop added successfully", "cropId": crop_id}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    
+
+@app.route('/deleteCrop', methods=['DELETE'])
+def delete_crop():
+    try:
+        user_id = request.args.get("userId")
+        crop_id = request.args.get("cropId")
+
+        if not user_id or not crop_id:
+            return jsonify({"error": "Missing userId or cropId"}), 400
+
+        db.collection("plants").document(user_id).collection("crops").document(crop_id).delete()
+
+        return jsonify({"message": "Crop deleted successfully"}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/getCrops', methods=['GET'])
+def get_crops():
+    try:
+        user_id = request.args.get('userId')
+        if not user_id:
+            return jsonify({"error": "Missing userId"}), 400
+
+        crops_ref = db.collection("users").document(user_id).collection("crops")
+        crops = crops_ref.stream()
+
+        crop_list = []
+        for crop in crops:
+            crop_data = crop.to_dict()
+            crop_data["id"] = crop.id
+            crop_list.append(crop_data)
+
+        return jsonify({"crops": crop_list}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/")
+def index():
+    return "Firebase is connected and the server is running!"
+
+
 if __name__ == '__main__':
     print("🏥 Simple Medical Chat API")
-    print("=" * 30)
+    print("=" * 35)
     print("📋 Endpoints:")
     print("  POST /chat - Medical chat")
     print("  POST /analyze - Symptom analysis")
     print("  POST /analyze_image - Image analysis")
     print("  GET /history/<user_id> - User history")
     print("  GET /health - Health check")
+    print("  POST /addCrop - Add crop data to Firebase")
+    print("  DELETE /deleteCrop - Delete crop data from Firebase")
+    print("  GET /getCrops - Get crops from Firebase")
     print("\n🚀 Starting server...")
     
     app.run(host='0.0.0.0', port=5000, debug=True)
