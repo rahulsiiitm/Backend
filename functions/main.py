@@ -8,7 +8,9 @@ import os
 from datetime import datetime
 import firebase_admin
 from firebase_admin import credentials, firestore
+from google.cloud.firestore_v1 import SERVER_TIMESTAMP
 import uuid
+import hashlib
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -50,6 +52,40 @@ def preprocess_image(image_path):
     img_array = np.expand_dims(img_array, axis=0) 
     return img_array
 
+# Helper function to generate user ID
+def generate_user_id(device_info=None):
+    """Generate a unique user ID based on device info or random"""
+    if device_info:
+        # Create hash from device info for consistent ID
+        return hashlib.md5(device_info.encode()).hexdigest()[:16]
+    else:
+        # Generate random user ID
+        return str(uuid.uuid4())[:16]
+
+# Helper function to get or create user ID
+def get_or_create_user_id(request_data):
+    """Extract user_id from request or create new one"""
+    user_id = request_data.get('user_id') or request_data.get('userId')
+    
+    # If no user_id provided or it's invalid (like '0'), create new one
+    if not user_id or user_id in ['0', '', 'null', 'undefined']:
+        device_info = request_data.get('device_info', '')
+        user_id = generate_user_id(device_info)
+        
+        # Create user document in Firebase if it doesn't exist
+        try:
+            user_ref = db.collection("users").document(user_id)
+            if not user_ref.get().exists:
+                user_ref.set({
+                    "createdAt": datetime.now(),
+                    "lastActive": datetime.now(),
+                    "deviceInfo": device_info
+                })
+        except Exception as e:
+            print(f"Warning: Could not create user document: {e}")
+    
+    return user_id
+
 # Simple in-memory storage (for beginners)
 chat_history = {}
 user_consultations = {}
@@ -64,114 +100,144 @@ if not GEMINI_API_KEY:
 genai.configure(api_key=GEMINI_API_KEY)
 print("✅ Gemini API configured successfully")
 
-# Chat endpoint
+# User management endpoints
+@app.route('/createUser', methods=['POST'])
+def create_user():
+    """Create a new user or return existing user ID"""
+    try:
+        data = request.get_json() or {}
+        device_info = data.get('device_info', '')
+        
+        user_id = generate_user_id(device_info)
+        
+        # Create user document in Firebase
+        user_ref = db.collection("users").document(user_id)
+        if not user_ref.get().exists:
+            user_ref.set({
+                "createdAt": datetime.now(),
+                "lastActive": datetime.now(),
+                "deviceInfo": device_info
+            })
+        
+        return jsonify({
+            'success': True,
+            'userId': user_id,
+            'message': 'User created successfully'
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/getUser/<user_id>', methods=['GET'])
+def get_user(user_id):
+    """Get user information"""
+    try:
+        user_ref = db.collection("users").document(user_id)
+        user_doc = user_ref.get()
+        
+        if not user_doc.exists:
+            return jsonify({'error': 'User not found'}), 404
+        
+        user_data = user_doc.to_dict()
+        
+        # Update last active
+        user_ref.update({"lastActive": datetime.now()})
+        
+        return jsonify({
+            'success': True,
+            'userId': user_id,
+            'userData': user_data
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# Chat endpoint - handles both new and existing chats
 @app.route('/chat', methods=['POST'])
 def medical_chat():
-    """Simple medical chat"""
+    """Medical chat with automatic chat management - creates chat only when user sends first message"""
     try:
         data = request.get_json()
         message = data.get('message', '')
-        user_id = data.get('user_id', 'user1')
+        user_id = get_or_create_user_id(data)  # Get or create user ID
+        chat_id = data.get('chat_id') or data.get('chatId')  # Support both formats
         
         if not message:
             return jsonify({'error': 'No message provided'}), 400
         
-        # Get chat history for this user
-        if user_id not in chat_history:
-            chat_history[user_id] = []
+        # Get chat history from Firebase
+        history = []
+        is_new_chat = False
         
-        # Create simple prompt
+        if chat_id:
+            # Existing chat - get history
+            chat_doc = db.collection("users").document(user_id).collection("chats").document(chat_id).get()
+            if chat_doc.exists:
+                messages = chat_doc.to_dict().get('messages', [])
+                history = [f"{msg['sender']}: {msg['message']}" for msg in messages[-5:]]  # Last 5
+            else:
+                # Invalid chat_id, treat as new chat
+                chat_id = None
+        
+        if not chat_id:
+            # New chat - create it only now when user sends first message
+            chat_id = str(uuid.uuid4())
+            is_new_chat = True
+        
+        # Create prompt with Firebase history
         prompt = f"""
         You are a friendly agricultural medical assistant. Answer health questions naturally.
 
-        Previous conversation: {chat_history[user_id][-5:]}  # Last 5 messages
+        Previous conversation: {history}
 
         User: {message}
         
         Respond helpfully but always remind users to consult doctors for serious concerns.
         """
         
-        # Generate response using Gemini
+        # Generate response
         model = genai.GenerativeModel('gemini-1.5-flash')
         response = model.generate_content(prompt)
         bot_response = response.text
         
-        # Save to memory
-        chat_history[user_id].append(f"User: {message}")
-        chat_history[user_id].append(f"Bot: {bot_response}")
+        # Save to Firebase
+        if is_new_chat:
+            # Create new chat with first message exchange
+            db.collection("users").document(user_id).collection("chats").document(chat_id).set({
+                "createdAt": datetime.now(),
+                "lastMessage": bot_response,
+                "updatedAt": datetime.now(),
+                "messages": [
+                    {"sender": "user", "message": message, "timestamp": datetime.now()},
+                    {"sender": "bot", "message": bot_response, "timestamp": datetime.now()}
+                ]
+            })
+        else:
+            # Update existing chat
+            db.collection("users").document(user_id).collection("chats").document(chat_id).update({
+                "lastMessage": bot_response,
+                "updatedAt": datetime.now(),
+                "messages": firestore.ArrayUnion([
+                    {"sender": "user", "message": message, "timestamp": datetime.now()},
+                    {"sender": "bot", "message": bot_response, "timestamp": datetime.now()}
+                ])
+            })
         
         return jsonify({
             'success': True,
-            'response': bot_response
+            'response': bot_response,
+            'chat_id': chat_id,
+            'user_id': user_id,  # Always return user_id
+            'is_new_chat': is_new_chat
         })
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-
-
-# @app.route('/analyze', methods=['POST'])
-# def analyze_symptoms():
-#     """Analyze symptoms with structured response"""
-#     try:
-#         data = request.get_json()
-#         symptoms = data.get('symptoms', '')
-#         user_id = data.get('user_id', 'user1')
-        
-#         if not symptoms:
-#             return jsonify({'error': 'No symptoms provided'}), 400
-        
-#         # Simple analysis prompt
-#         prompt = f"""
-#         Analyze these symptoms and respond in JSON format:
-#         Symptoms: {symptoms}
-        
-#         {{
-#           "conditions": ["condition1", "condition2"],
-#           "severity": "Low/Medium/High",
-#           "advice": "what to do next",
-#           "disclaimer": "Always consult a doctor for proper diagnosis"
-#         }}
-#         """
-        
-#         model = genai.GenerativeModel('gemini-1.5-flash')
-#         response = model.generate_content(prompt)
-        
-#         # Try to parse JSON
-#         try:
-#             result = json.loads(response.text.strip('```json').strip('```'))
-#         except:
-#             result = {
-#                 "conditions": ["Please consult a doctor"],
-#                 "severity": "Unknown",
-#                 "advice": "Get medical attention",
-#                 "disclaimer": "Always consult a doctor for proper diagnosis"
-#             }
-        
-#         # Save consultation
-#         if user_id not in user_consultations:
-#             user_consultations[user_id] = []
-        
-#         consultation = {
-#             'symptoms': symptoms,
-#             'analysis': result,
-#             'timestamp': datetime.now().isoformat()
-#         }
-#         user_consultations[user_id].append(consultation)
-        
-#         return jsonify({
-#             'success': True,
-#             'analysis': result
-#         })
-        
-#     except Exception as e:
-#         return jsonify({'error': str(e)}), 500
-    
-
-
-# Analyze image endpoint    
+# Analyze image endpoint - handles both new and existing chats
 @app.route('/analyze_image', methods=['POST'])
 def analyze_image():
+    """Image analysis with automatic chat management - creates chat only when user uploads first image"""
     try:
         if 'image' not in request.files:
             return jsonify({'error': 'No image file provided'}), 400
@@ -179,6 +245,11 @@ def analyze_image():
         image_file = request.files['image']
         if image_file.filename == '':
             return jsonify({'error': 'Empty filename'}), 400
+
+        # Get user data - support both form data and JSON
+        form_data = dict(request.form)
+        user_id = get_or_create_user_id(form_data)  # Get or create user ID
+        chat_id = form_data.get('chat_id') or form_data.get('chatId')
 
         image_path = 'temp_image.jpg'
         image_file.save(image_path)
@@ -200,27 +271,72 @@ def analyze_image():
         model = genai.GenerativeModel('gemini-1.5-flash')
         response = model.generate_content(prompt)
 
-        # Save to memory
-        user_id = request.form.get('user_id', 'user1')
-        if user_id not in chat_history:
-            chat_history[user_id] = []
-        chat_history[user_id].append(f"Bot: {response.text}")
+        # Handle Firebase chat history
+        is_new_chat = False
+        if chat_id:
+            # Check if chat exists
+            chat_doc = db.collection("users").document(user_id).collection("chats").document(chat_id).get()
+            if not chat_doc.exists:
+                # Invalid chat_id, treat as new chat
+                chat_id = None
+                
+        if not chat_id:
+            # New chat - create it only now when user uploads first image
+            chat_id = str(uuid.uuid4())
+            is_new_chat = True
+
+        # Prepare messages
+        user_message = f"[Image Analysis] Uploaded plant image"
+        bot_message = f"Disease detected: {predicted_label}\n\n{response.text}"
+        
+        # Save to Firebase
+        if is_new_chat:
+            # Create new chat with first image analysis
+            db.collection("users").document(user_id).collection("chats").document(chat_id).set({
+                "createdAt": datetime.now(),
+                "lastMessage": bot_message,
+                "updatedAt": datetime.now(),
+                "messages": [
+                    {"sender": "user", "message": user_message, "timestamp": datetime.now(), "type": "image"},
+                    {"sender": "bot", "message": bot_message, "timestamp": datetime.now(), "type": "analysis"}
+                ]
+            })
+        else:
+            # Update existing chat
+            db.collection("users").document(user_id).collection("chats").document(chat_id).update({
+                "lastMessage": bot_message,
+                "updatedAt": datetime.now(),
+                "messages": firestore.ArrayUnion([
+                    {"sender": "user", "message": user_message, "timestamp": datetime.now(), "type": "image"},
+                    {"sender": "bot", "message": bot_message, "timestamp": datetime.now(), "type": "analysis"}
+                ])
+            })
+
+        # Clean up temp file
+        if os.path.exists(image_path):
+            os.remove(image_path)
 
         return jsonify({
             'success': True,
             'predicted_label': predicted_label,
-            'gemini_explanation': response.text
+            'gemini_explanation': response.text,
+            'chat_id': chat_id,
+            'user_id': user_id,  # Always return user_id
+            'is_new_chat': is_new_chat
         })
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
-
 
 # History endpoint
 @app.route('/history/<user_id>', methods=['GET'])
 def get_history(user_id):
     """Get user's consultation history"""
     try:
+        # Validate user_id
+        if not user_id or user_id in ['0', '', 'null', 'undefined']:
+            return jsonify({'error': 'Invalid user ID provided'}), 400
+            
         consultations = user_consultations.get(user_id, [])
         chats = chat_history.get(user_id, [])
         
@@ -238,17 +354,21 @@ def get_history(user_id):
 def home():
     """API information"""
     return jsonify({
-        'message': 'Simple Medical Chat API',
+        'message': 'Agricultural Medical Chat API',
         'endpoints': {
-            'POST /chat': 'Chat with medical assistant',
-            # 'POST /analyze': 'Analyze symptoms',
-            'POST /analyze_image': 'Analyze medical images',
+            'POST /createUser': 'Create or get user ID',
+            'GET /getUser/<user_id>': 'Get user information',
+            'POST /chat': 'Chat with agricultural assistant (creates/continues chat)',
+            'POST /analyze_image': 'Analyze plant disease images (creates/continues chat)',
             'GET /history/<user_id>': 'Get user history',
             'GET /health': 'Health check',
             'POST /addCrop': 'Add crop data to Firebase',
+            'PUT /updateCrop': 'Update crop data in Firebase',
             'DELETE /deleteCrop': 'Delete crop data from Firebase',
             'GET /getCrops': 'Get crops from Firebase',
-            'GET /getSuggestions': 'Get farming suggestions based on crops'
+            'GET /getSuggestions': 'Get farming suggestions based on crops',
+            'GET /getChats': 'Get all user chat history',
+            'GET /getChat': 'Get specific chat conversation'
         }
     })
 
@@ -263,23 +383,27 @@ def health():
         'consultations': sum(len(v) for v in user_consultations.values())
     })
 
-# Crop management endpoints--------------------------------------------------------------------------------
-
+# Crop management endpoints
 @app.route('/addCrop', methods=['POST'])
 def add_crop():
     try:
         data = request.get_json()
-        user_id = data.get('userId')
+        user_id = get_or_create_user_id(data)  # Get or create user ID
         crop_data = data.get('cropData')
-        if not user_id or not crop_data:
-            return jsonify({"error": "Missing userId or cropData"}), 400
+        
+        if not crop_data:
+            return jsonify({"error": "Missing cropData"}), 400
 
         crop_id = str(uuid.uuid4())
         crop_data["timestamp"] = datetime.now()
 
         db.collection("users").document(user_id).collection("crops").document(crop_id).set(crop_data)
 
-        return jsonify({"message": "Crop added successfully", "cropId": crop_id}), 200
+        return jsonify({
+            "message": "Crop added successfully", 
+            "cropId": crop_id,
+            "userId": user_id
+        }), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     
@@ -287,44 +411,60 @@ def add_crop():
 def update_crop():
     try:
         data = request.get_json()
-        user_id = data.get('userId')
+        user_id = get_or_create_user_id(data)  # Get or create user ID
         crop_id = data.get('cropId')
         crop_data = data.get('cropData')
         
-        if not user_id or not crop_id or not crop_data:
-            return jsonify({"error": "Missing userId, cropId or cropData"}), 400
+        if not crop_id or not crop_data:
+            return jsonify({"error": "Missing cropId or cropData"}), 400
 
         crop_data["updatedAt"] = datetime.now()
 
         db.collection("users").document(user_id).collection("crops").document(crop_id).update(crop_data)
 
-        return jsonify({"message": "Crop updated successfully"}), 200
+        return jsonify({
+            "message": "Crop updated successfully",
+            "userId": user_id
+        }), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
 
 @app.route('/deleteCrop', methods=['DELETE'])
 def delete_crop():
     try:
-        user_id = request.args.get("userId")
-        crop_id = request.args.get("cropId")
+        # Support both query params and JSON body
+        if request.is_json:
+            data = request.get_json()
+            user_id = get_or_create_user_id(data)
+            crop_id = data.get("cropId")
+        else:
+            user_id = request.args.get("userId")
+            crop_id = request.args.get("cropId")
+            
+            # Validate user_id if from query params
+            if not user_id or user_id in ['0', '', 'null', 'undefined']:
+                return jsonify({"error": "Invalid user ID provided"}), 400
 
-        if not user_id or not crop_id:
-            return jsonify({"error": "Missing userId or cropId"}), 400
+        if not crop_id:
+            return jsonify({"error": "Missing cropId"}), 400
 
-        db.collection("plants").document(user_id).collection("crops").document(crop_id).delete()
+        db.collection("users").document(user_id).collection("crops").document(crop_id).delete()
 
-        return jsonify({"message": "Crop deleted successfully"}), 200
+        return jsonify({
+            "message": "Crop deleted successfully",
+            "userId": user_id
+        }), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
 
 @app.route('/getCrops', methods=['GET'])
 def get_crops():
     try:
         user_id = request.args.get('userId')
-        if not user_id:
-            return jsonify({"error": "Missing userId"}), 400
+        
+        # Validate user_id
+        if not user_id or user_id in ['0', '', 'null', 'undefined']:
+            return jsonify({"error": "Invalid user ID provided"}), 400
 
         crops_ref = db.collection("users").document(user_id).collection("crops")
         crops = crops_ref.stream()
@@ -335,21 +475,25 @@ def get_crops():
             crop_data["id"] = crop.id
             crop_list.append(crop_data)
 
-        return jsonify({"crops": crop_list}), 200
+        return jsonify({
+            "crops": crop_list,
+            "userId": user_id
+        }), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-    
 
-# Home Screen suggestion endpoint---------------------------------------------------------------------------------
+# Home Screen suggestion endpoint
 @app.route('/getSuggestions', methods=['GET'])
 def get_suggestions():
     try:
         user_id = request.args.get("userId")
-        if not user_id:
-            return jsonify({"error": "Missing userId"}), 400
+        
+        # Validate user_id
+        if not user_id or user_id in ['0', '', 'null', 'undefined']:
+            return jsonify({"error": "Invalid user ID provided"}), 400
 
         # Fetch crops
-        crops_ref = db.collection("plants").document(user_id).collection("crops").stream()
+        crops_ref = db.collection("users").document(user_id).collection("crops").stream()
         crops = [doc.to_dict() for doc in crops_ref]
 
         if not crops:
@@ -448,83 +592,139 @@ Examples:
                 }
             },
             "generated_at": current_date.isoformat(),
-            "total_crops": len(crop_details)
+            "total_crops": len(crop_details),
+            "userId": user_id
         }), 200
 
     except Exception as e:
         return jsonify({"error": f"Failed to generate suggestions: {str(e)}"}), 500
 
-
-# Alternative simpler response format (if you prefer the original structure)
-@app.route('/getSuggestionsSimple', methods=['GET'])
-def get_suggestions_simple():
+# Chat history management endpoints
+@app.route('/getChats', methods=['GET'])
+def get_chats():
+    """Get all chats for user"""
     try:
-        user_id = request.args.get("userId")
-        if not user_id:
-            return jsonify({"error": "Missing userId"}), 400
-
-        crops_ref = db.collection("plants").document(user_id).collection("crops").stream()
-        crops = [doc.to_dict() for doc in crops_ref]
-
-        if not crops:
-            return jsonify({"error": "No crops found for this user"}), 404
-
-        # Calculate crop ages
-        from datetime import datetime
-        current_date = datetime.now()
+        user_id = request.args.get('userId')
         
-        crop_details = []
-        for crop in crops:
-            try:
-                sowed_date = datetime.strptime(crop['sowedDate'], '%Y-%m-%d')
-                days_old = (current_date - sowed_date).days
-                crop_details.append(f"{crop['name']} ({crop['area']} acres, {days_old} days old)")
-            except (ValueError, KeyError):
-                crop_details.append(f"{crop['name']} ({crop['area']} acres)")
-
-        prompt = f"""Crops: {', '.join(crop_details)}
-
-Give 4 urgent farming actions (max 20 words each):
-1. Which crop needs water most urgently?
-2. Which crop needs immediate care/attention?
-3. What's the next critical farming task?
-4. What weather-related action is needed?
-
-Make each suggestion specific, actionable, and mobile-card friendly."""
-
-        response = genai.GenerativeModel("gemini-1.5-flash").generate_content(prompt)
-        lines = [line.strip('1234567890.-•* ').strip() 
-                for line in response.text.strip().split('\n') 
-                if line.strip() and len(line.strip()) > 10]
+        # Validate user_id
+        if not user_id or user_id in ['0', '', 'null', 'undefined']:
+            return jsonify({"error": "Invalid user ID provided"}), 400
+            
+        chats = db.collection("users").document(user_id).collection("chats")\
+                .order_by("createdAt", direction=firestore.Query.DESCENDING).stream()
         
-        suggestions = lines[:4]
-        while len(suggestions) < 4:
-            suggestions.append("Monitor crops daily")
+        chat_list = []
+        for chat in chats:
+            data = chat.to_dict()
+            created_at = data.get("createdAt")
+            
+            # Convert Firestore timestamp to ISO format string if not None
+            if created_at:
+                created_at_str = created_at.isoformat()
+            else:
+                created_at_str = None
+                
+            chat_list.append({
+                "chatId": chat.id,
+                "lastMessage": data.get("lastMessage", ""),
+                "createdAt": created_at_str,
+                "updatedAt": data.get("updatedAt", created_at_str)
+            })
+            
+        return jsonify({
+            "chats": chat_list,
+            "userId": user_id
+        }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/getChat', methods=['GET'])
+def get_chat():
+    """Get specific chat conversation"""
+    try:
+        user_id = request.args.get('userId')
+        chat_id = request.args.get('chatId')
+
+        # Validate user_id
+        if not user_id or user_id in ['0', '', 'null', 'undefined']:
+            return jsonify({"error": "Invalid user ID provided"}), 400
+            
+        if not chat_id:
+            return jsonify({"error": "Missing chatId"}), 400
+
+        # Fetch the chat document
+        chat_ref = db.collection("users").document(user_id).collection("chats").document(chat_id)
+        chat_doc = chat_ref.get()
+
+        if not chat_doc.exists:
+            return jsonify({"error": "Chat not found"}), 404
+
+        chat_data = chat_doc.to_dict()
+        messages = chat_data.get("messages", [])
+
+        # Convert timestamps to ISO format for frontend
+        for msg in messages:
+            if "timestamp" in msg:
+                msg["timestamp"] = msg["timestamp"].isoformat()
 
         return jsonify({
-            "suggestion1": suggestions[0],
-            "suggestion2": suggestions[1], 
-            "suggestion3": suggestions[2],
-            "suggestion4": suggestions[3],
+            "chatId": chat_id,
+            "userId": user_id,
+            "createdAt": chat_data.get("createdAt").isoformat() if chat_data.get("createdAt") else None,
+            "updatedAt": chat_data.get("updatedAt").isoformat() if chat_data.get("updatedAt") else None,
+            "messages": messages
         }), 200
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    
+# Delete all chats endpoint
+@app.route('/deleteAllChats', methods=['DELETE'])
+def delete_all_chats():
+    """Delete all chats for a given user"""
+    try:
+        user_id = request.args.get('userId')
 
-#--------------------------------------------------------------------------------------------------------
+        # Validate userId
+        if not user_id or user_id in ['0', '', 'null', 'undefined']:
+            return jsonify({"error": "Invalid user ID provided"}), 400
+
+        # Reference to the user's chat collection
+        chat_collection_ref = db.collection("users").document(user_id).collection("chats")
+
+        # Get all chat documents
+        chat_docs = chat_collection_ref.stream()
+
+        deleted_count = 0
+        for doc in chat_docs:
+            doc.reference.delete()
+            deleted_count += 1
+
+        return jsonify({
+            "message": f"Deleted {deleted_count} chat(s) for user {user_id}"
+        }), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    
+    
+
 if __name__ == '__main__':
-    print("🏥 Simple Medical Chat API")
+    print("🌾 Agricultural Medical Chat API")
     print("=" * 35)
-    print("📋 Endpoints:")
-    print("  POST /chat - Medical chat")
-    print("  POST /analyze - Symptom analysis")
-    print("  POST /analyze_image - Image analysis")
-    print("  GET /history/<user_id> - User history")
+    print("📋 Main Endpoints:")
+    print("  POST /createUser - Create or get user ID")
+    print("  GET /getUser/<user_id> - Get user information")
+    print("  POST /chat - Chat with assistant (auto-manages chats)")
+    print("  POST /analyze_image - Analyze plant images (auto-manages chats)")
+    print("  GET /getChats - Get all user's chat history")
+    print("  GET /getChat - Get specific chat conversation")
     print("  GET /health - Health check")
-    print("  POST /addCrop - Add crop data to Firebase")
-    print("  PUT /updateCrop - Update crop data in Firebase")
-    print("  DELETE /deleteCrop - Delete crop data from Firebase")
-    print("  GET /getCrops - Get crops from Firebase")
+    print("\n🌱 Crop Management:")
+    print("  POST /addCrop - Add crop data")
+    print("  PUT /updateCrop - Update crop data")
+    print("  DELETE /deleteCrop - Delete crop data")
+    print("  GET /getCrops - Get user's crops")
     print("  GET /getSuggestions - Get farming suggestions")
     print("\n🚀 Starting server...")
     
