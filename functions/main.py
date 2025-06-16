@@ -383,29 +383,34 @@ def health():
         'consultations': sum(len(v) for v in user_consultations.values())
     })
 
-# Crop management endpoints
 @app.route('/addCrop', methods=['POST'])
 def add_crop():
     try:
         data = request.get_json()
-        user_id = get_or_create_user_id(data)  # Get or create user ID
-        crop_data = data.get('cropData')
-        
-        if not crop_data:
-            return jsonify({"error": "Missing cropData"}), 400
+        user_id = get_or_create_user_id(data)
+        crop_data_list = data.get('cropData')
 
-        crop_id = str(uuid.uuid4())
-        crop_data["timestamp"] = datetime.now()
+        if not crop_data_list or not isinstance(crop_data_list, list):
+            return jsonify({"error": "cropData must be a non-empty list"}), 400
 
-        db.collection("users").document(user_id).collection("crops").document(crop_id).set(crop_data)
+        added_crops = []
+
+        for crop_data in crop_data_list:
+            crop_id = str(uuid.uuid4())
+            crop_data["timestamp"] = datetime.now().isoformat()
+
+            db.collection("users").document(user_id).collection("crops").document(crop_id).set(crop_data)
+            added_crops.append({"cropId": crop_id, "data": crop_data})
 
         return jsonify({
-            "message": "Crop added successfully", 
-            "cropId": crop_id,
-            "userId": user_id
+            "message": "Crop(s) added successfully",
+            "userId": user_id,
+            "cropsAdded": added_crops
         }), 200
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
     
 @app.route('/updateCrop', methods=['PUT'])
 def update_crop():
@@ -470,15 +475,43 @@ def get_crops():
         crops = crops_ref.stream()
 
         crop_list = []
+        is_empty = True
+        
+        def safe_string_conversion(value):
+            """Convert any value to string, handling None values"""
+            if value is None:
+                return None
+            return str(value)
+        
         for crop in crops:
+            is_empty = False
             crop_data = crop.to_dict()
-            crop_data["id"] = crop.id
-            crop_list.append(crop_data)
+            
+            # Ensure all fields are strings and handle potential type mismatches
+            processed_crop = {
+                "id": crop.id,
+                "name": safe_string_conversion(crop_data.get('name', '')),
+                "type": safe_string_conversion(crop_data.get('type', '')),
+                "plantedDate": safe_string_conversion(
+                    crop_data.get('sowedDate') or crop_data.get('plantedDate') or crop_data.get('planted_date')
+                ),
+                "area": safe_string_conversion(crop_data.get('area')),
+            }
+            
+            crop_list.append(processed_crop)
+
+        if is_empty:
+            return jsonify({
+                "message": "No crops found for this user",
+                "crops": [],
+                "userId": user_id
+            }), 200
 
         return jsonify({
             "crops": crop_list,
             "userId": user_id
         }), 200
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -683,7 +716,14 @@ def get_chat():
 def delete_all_chats():
     """Delete all chats for a given user"""
     try:
-        user_id = request.args.get('userId')
+        # Get the JSON data from request body
+        data = request.get_json()
+        
+        # Validate that JSON data exists
+        if not data:
+            return jsonify({"error": "No JSON data provided"}), 400
+            
+        user_id = data.get('userId')
 
         # Validate userId
         if not user_id or user_id in ['0', '', 'null', 'undefined']:
@@ -701,13 +741,17 @@ def delete_all_chats():
             deleted_count += 1
 
         return jsonify({
-            "message": f"Deleted {deleted_count} chat(s) for user {user_id}"
+            "success": True,
+            "message": f"Deleted {deleted_count} chat(s) for user {user_id}",
+            "deletedCount": deleted_count
         }), 200
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
-    
-    
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
 
 if __name__ == '__main__':
     print("🌾 Agricultural Medical Chat API")
