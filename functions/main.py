@@ -12,6 +12,7 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 import uuid
 from dotenv import load_dotenv  # Add this import
+import json
 
 # Load environment variables from .env file
 load_dotenv()  # Add this line
@@ -21,7 +22,8 @@ app = Flask(__name__)
 CORS(app)
 
 # Initialize Firebase
-cred = credentials.Certificate("firebase-key.json")
+firebase_key = os.getenv("FIREBASE_KEY")
+cred = credentials.Certificate(json.loads(firebase_key))
 firebase_admin.initialize_app(cred)
 db = firestore.client()
 
