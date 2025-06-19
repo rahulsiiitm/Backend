@@ -1,7 +1,3 @@
-import tensorflow as tf
-from tensorflow.keras.preprocessing import image
-import numpy as np
-import random
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import google.generativeai as genai
@@ -11,11 +7,11 @@ from datetime import datetime
 import firebase_admin
 from firebase_admin import credentials, firestore
 import uuid
-from dotenv import load_dotenv  # Add this import
+from dotenv import load_dotenv
 import json
 
 # Load environment variables from .env file
-load_dotenv()  # Add this line
+load_dotenv()
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -27,30 +23,10 @@ cred = credentials.Certificate(json.loads(firebase_key))
 firebase_admin.initialize_app(cred)
 db = firestore.client()
 
-# Load model
-disease_model = tf.keras.models.load_model("functions/models/plant_disease_model.keras")
-
-FRIENDLY_LABELS = {
-    'Pepper__bell___Bacterial_spot': 'Bacterial spot on bell pepper',
-    'Pepper__bell___healthy': 'Healthy bell pepper',
-    'Potato___Early_blight': 'Potato early blight',
-    'Potato___healthy': 'Healthy potato',
-    'Potato___Late_blight': 'Potato late blight',
-    'Tomato___Target_Spot': 'Tomato target spot',
-    'Tomato___Tomato_mosaic_virus': 'Tomato mosaic virus',
-    'Tomato___Tomato_YellowLeaf_Curl_Virus': 'Tomato yellow leaf curl virus',
-    'Tomato___Bacterial_spot': 'Tomato bacterial spot',
-    'Tomato___Early_blight': 'Tomato early blight',
-    'Tomato___healthy': 'Healthy tomato',
-    'Tomato___Late_blight': 'Tomato late blight',
-    'Tomato___Leaf_Mold': 'Tomato leaf mold',
-    'Tomato___Septoria_leaf_spot': 'Tomato septoria leaf spot',
-    'Tomato___Spider_mites_Two_spotted_spider_mite': 'Tomato spider mite infection'
-}
-
 # Configure APIs
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
 OPENWEATHER_API_KEY = os.environ.get('OPENWEATHER_API_KEY')
+HF_MODEL_API_URL = os.environ.get('HF_MODEL_API_URL')  # Add your Hugging Face model URL
 
 if not GEMINI_API_KEY:
     print("❌ Error: GEMINI_API_KEY not found")
@@ -58,16 +34,13 @@ if not GEMINI_API_KEY:
 if not OPENWEATHER_API_KEY:
     print("❌ Error: OPENWEATHER_API_KEY not found")
     exit(1)
+if not HF_MODEL_API_URL:
+    print("⚠️  Warning: HF_MODEL_API_URL not found - image analysis will not work")
 
 genai.configure(api_key=GEMINI_API_KEY)
 print("✅ APIs configured successfully")
 
 # Utility functions
-def preprocess_image(image_path):
-    img = image.load_img(image_path, target_size=(128, 128))
-    img_array = image.img_to_array(img) / 255.0
-    return np.expand_dims(img_array, axis=0)
-
 def validate_user_id(user_id):
     """Validate that user_id is provided and not empty"""
     if not user_id or user_id.strip() == '' or user_id in ['null', 'undefined']:
@@ -81,8 +54,40 @@ def update_user_activity(user_id):
     except Exception as e:
         app.logger.warning(f"Could not update user activity for {user_id}: {e}")
 
-
-
+def call_hf_model_api(image_data, is_file=True):
+    """Call the Hugging Face model API for disease prediction"""
+    try:
+        if not HF_MODEL_API_URL:
+            raise Exception("Hugging Face model API URL not configured")
+        
+        if is_file:
+            # Send as file upload
+            files = {'image': image_data}
+            response = requests.post(
+                f"{HF_MODEL_API_URL}/predict",
+                files=files,
+                timeout=30
+            )
+        else:
+            # Send as base64 JSON
+            headers = {'Content-Type': 'application/json'}
+            data = {'image': image_data}
+            response = requests.post(
+                f"{HF_MODEL_API_URL}/predict",
+                json=data,
+                headers=headers,
+                timeout=30
+            )
+        
+        response.raise_for_status()
+        return response.json()
+        
+    except requests.exceptions.RequestException as e:
+        print(f"Error calling HF model API: {e}")
+        raise Exception(f"Model API error: {str(e)}")
+    except Exception as e:
+        print(f"Error in HF model API call: {e}")
+        raise
 
 def generate_farming_suggestions_with_gemini(crops, weather_data):
     """Generate farming suggestions using Gemini AI based on user's actual crops and weather"""
@@ -148,7 +153,6 @@ Example format:
         response = model.generate_content(prompt)
         
         # Try to parse JSON response
-        import json
         try:
             # Clean the response text to extract JSON
             response_text = response.text.strip()
@@ -207,6 +211,7 @@ def parse_text_suggestions(text, crops):
 
 def generate_fallback_suggestions(crops, weather_data):
     """Generate basic fallback suggestions if Gemini fails"""
+    import random
     suggestions = []
     temp = weather_data['current']['temperature'] if weather_data else 25
     humidity = weather_data['current']['humidity'] if weather_data else 65
@@ -243,6 +248,7 @@ def generate_fallback_suggestions(crops, weather_data):
 
 def generate_daily_suggestion_with_gemini(crops, weather_data):
     """Generate a single daily suggestion using Gemini"""
+    import random
     try:
         # Prepare crop information
         crop_names = [crop['name'] for crop in crops]
@@ -280,7 +286,6 @@ Keep it encouraging and practical!
         response = model.generate_content(prompt)
         
         # Try to parse JSON response
-        import json
         try:
             response_text = response.text.strip()
             if response_text.startswith('```json'):
@@ -313,14 +318,6 @@ Keep it encouraging and practical!
             "heading": "Farm check time! 🚜",
             "body": f"How's your {selected_crop} doing today? A quick inspection never hurts!"
         }
-
-
-
-
-
-
-
-
 
 def get_weather_data(lat, lon):
     """Fetch current weather and 5-day forecast"""
@@ -469,7 +466,7 @@ def medical_chat():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-# Image analysis endpoint
+# Modified image analysis endpoint - now calls HF API
 @app.route('/analyze_image', methods=['POST'])
 def analyze_image():
     try:
@@ -491,20 +488,30 @@ def analyze_image():
         # Update user activity
         update_user_activity(user_id)
 
-        image_path = 'temp_image.jpg'
-        image_file.save(image_path)
+        # Call the Hugging Face model API
+        try:
+            # Reset file pointer to beginning
+            image_file.seek(0)
+            
+            # Call HF model API
+            model_response = call_hf_model_api(image_file, is_file=True)
+            
+            if not model_response.get('success'):
+                raise Exception(model_response.get('error', 'Model prediction failed'))
+            
+            prediction_data = model_response['prediction']
+            predicted_label = prediction_data['disease']
+            confidence = prediction_data['confidence']
+            
+        except Exception as e:
+            return jsonify({
+                'success': False,
+                'error': f'Model prediction failed: {str(e)}'
+            }), 500
 
-        # Predict disease
-        input_img = preprocess_image(image_path)
-        prediction = disease_model.predict(input_img)
-
-        CLASS_NAMES = list(FRIENDLY_LABELS.keys())
-        predicted_index = np.argmax(prediction)
-        predicted_key = CLASS_NAMES[predicted_index]
-        predicted_label = FRIENDLY_LABELS[predicted_key]
-
+        # Generate explanation using Gemini
         prompt = f"""
-        A plant has been detected with the disease: {predicted_label}.
+        A plant has been detected with the disease: {predicted_label} (confidence: {confidence:.2%}).
         Please explain what this disease is, how it affects the plant, and how a farmer can treat or prevent it.
         Keep it short and clear.
         """
@@ -523,7 +530,7 @@ def analyze_image():
             is_new_chat = True
 
         user_message = f"[Image Analysis] Uploaded plant image"
-        bot_message = f"Disease detected: {predicted_label}\n\n{response.text}"
+        bot_message = f"Disease detected: {predicted_label} (Confidence: {confidence:.1%})\n\n{response.text}"
         
         message_data = [
             {"sender": "user", "message": user_message, "timestamp": datetime.now(), "type": "image"},
@@ -544,13 +551,11 @@ def analyze_image():
                 "messages": firestore.ArrayUnion(message_data)
             })
 
-        # Clean up
-        if os.path.exists(image_path):
-            os.remove(image_path)
-
         return jsonify({
             'success': True,
             'predicted_label': predicted_label,
+            'confidence': confidence,
+            'top_3_predictions': prediction_data.get('top_3', []),
             'gemini_explanation': response.text,
             'chat_id': chat_id,
             'user_id': user_id,
@@ -559,6 +564,7 @@ def analyze_image():
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
 
 # Crop management endpoints
 @app.route('/addCrop', methods=['POST'])
