@@ -1,6 +1,7 @@
 from tensorflow.keras.models import load_model # type: ignore
 from tensorflow.keras.preprocessing import image # type: ignore
 import numpy as np
+import random
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import google.generativeai as genai
@@ -77,6 +78,247 @@ def update_user_activity(user_id):
         user_ref.set({"lastActive": datetime.now()}, merge=True)
     except Exception as e:
         app.logger.warning(f"Could not update user activity for {user_id}: {e}")
+
+
+
+
+def generate_farming_suggestions_with_gemini(crops, weather_data):
+    """Generate farming suggestions using Gemini AI based on user's actual crops and weather"""
+    try:
+        # Prepare crop information
+        crop_info = []
+        for crop in crops:
+            crop_info.append(f"- {crop['name']} ({crop.get('type', 'unknown type')}, planted {crop['days_old']} days ago)")
+        
+        crops_text = "\n".join(crop_info)
+        
+        # Prepare weather information
+        if weather_data:
+            current_weather = weather_data['current']
+            weather_text = f"""
+Current Weather:
+- Temperature: {current_weather['temperature']}°C (feels like {current_weather['feels_like']}°C)
+- Humidity: {current_weather['humidity']}%
+- Weather: {current_weather['description']}
+- Wind Speed: {current_weather['wind_speed']} m/s
+- Pressure: {current_weather['pressure']} hPa
+
+Forecast (next 24 hours):
+"""
+            for i, forecast in enumerate(weather_data['forecast'][:4]):
+                weather_text += f"- {forecast['date']}: {forecast['temp']}°C, {forecast['description']}, Rain: {forecast['rain']}mm\n"
+        else:
+            weather_text = "Weather data not available"
+
+        prompt = f"""
+You are an expert agricultural advisor. Based on the farmer's crops and current weather conditions, provide 4 practical farming suggestions.
+
+Farmer's Crops:
+{crops_text}
+
+{weather_text}
+
+Please provide exactly 4 specific, actionable farming suggestions. Each suggestion should:
+1. Be practical and immediately actionable
+2. Consider the current weather conditions
+3. Be specific to the crops the farmer is growing
+4. Include the crop name in the suggestion
+5. Be concise (1-2 sentences each)
+
+Format your response as a JSON array with 4 objects, each having:
+- "text": the suggestion text
+- "category": one of ["irrigation", "fertilizer", "protection", "care", "harvesting", "pest_control"]
+- "crop": the specific crop name mentioned
+- "priority": one of ["high", "medium", "low"]
+
+Example format:
+[
+  {{
+    "text": "Water your wheat early morning - temperature reaching 35°C today will stress the plants",
+    "category": "irrigation", 
+    "crop": "wheat",
+    "priority": "high"
+  }}
+]
+"""
+
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        response = model.generate_content(prompt)
+        
+        # Try to parse JSON response
+        import json
+        try:
+            # Clean the response text to extract JSON
+            response_text = response.text.strip()
+            if response_text.startswith('```json'):
+                response_text = response_text[7:-3]
+            elif response_text.startswith('```'):
+                response_text = response_text[3:-3]
+            
+            suggestions = json.loads(response_text)
+            
+            # Validate the response format
+            if isinstance(suggestions, list) and len(suggestions) >= 4:
+                return suggestions[:4]  # Return only first 4
+            else:
+                raise ValueError("Invalid suggestion format")
+                
+        except (json.JSONDecodeError, ValueError) as e:
+            print(f"Failed to parse Gemini JSON response: {e}")
+            # Fallback to text parsing
+            return parse_text_suggestions(response.text, crops)
+            
+    except Exception as e:
+        print(f"Error generating suggestions with Gemini: {e}")
+        return generate_fallback_suggestions(crops, weather_data)
+
+def parse_text_suggestions(text, crops):
+    """Parse text suggestions if JSON parsing fails"""
+    lines = text.split('\n')
+    suggestions = []
+    current_suggestion = ""
+    
+    for line in lines:
+        line = line.strip()
+        if line and not line.startswith('#') and not line.startswith('*'):
+            if any(crop['name'].lower() in line.lower() for crop in crops):
+                if current_suggestion:
+                    suggestions.append({
+                        "text": current_suggestion,
+                        "category": "care",
+                        "crop": "general",
+                        "priority": "medium"
+                    })
+                current_suggestion = line
+            elif current_suggestion:
+                current_suggestion += " " + line
+    
+    if current_suggestion:
+        suggestions.append({
+            "text": current_suggestion,
+            "category": "care", 
+            "crop": "general",
+            "priority": "medium"
+        })
+    
+    return suggestions[:4]
+
+def generate_fallback_suggestions(crops, weather_data):
+    """Generate basic fallback suggestions if Gemini fails"""
+    suggestions = []
+    temp = weather_data['current']['temperature'] if weather_data else 25
+    humidity = weather_data['current']['humidity'] if weather_data else 65
+    
+    for i, crop in enumerate(crops[:4]):
+        crop_name = crop['name']
+        days_old = crop['days_old']
+        
+        if temp > 30:
+            suggestion = f"Provide shade or extra water to your {crop_name} - high temperature ({temp}°C) can stress the plants"
+            category = "protection"
+            priority = "high"
+        elif humidity > 80:
+            suggestion = f"Check your {crop_name} for fungal diseases - high humidity ({humidity}%) increases disease risk"
+            category = "protection"
+            priority = "medium"
+        elif days_old > 60:
+            suggestion = f"Consider harvesting your {crop_name} soon - it's been {days_old} days since planting"
+            category = "harvesting"
+            priority = "medium"
+        else:
+            suggestion = f"Monitor your {crop_name} growth - apply balanced fertilizer if needed after {days_old} days"
+            category = "fertilizer"
+            priority = "medium"
+        
+        suggestions.append({
+            "text": suggestion,
+            "category": category,
+            "crop": crop_name,
+            "priority": priority
+        })
+    
+    return suggestions
+
+def generate_daily_suggestion_with_gemini(crops, weather_data):
+    """Generate a single daily suggestion using Gemini"""
+    try:
+        # Prepare crop information
+        crop_names = [crop['name'] for crop in crops]
+        crops_text = ", ".join(crop_names)
+        
+        # Prepare weather information
+        if weather_data:
+            current_weather = weather_data['current']
+            weather_text = f"Temperature: {current_weather['temperature']}°C, Humidity: {current_weather['humidity']}%, Weather: {current_weather['description']}"
+        else:
+            weather_text = "Weather data not available"
+
+        prompt = f"""
+You are a friendly agricultural advisor. Create ONE motivational daily suggestion for a farmer.
+
+Farmer's crops: {crops_text}
+Today's weather: {weather_text}
+
+Create a short, friendly daily suggestion with:
+1. A catchy heading with appropriate emoji
+2. A brief, actionable message (1-2 sentences)
+3. Mention one of their specific crops
+4. Consider today's weather conditions
+
+Format as JSON:
+{{
+  "heading": "Good morning message with emoji",
+  "body": "Specific actionable advice mentioning their crop"
+}}
+
+Keep it encouraging and practical!
+"""
+
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        response = model.generate_content(prompt)
+        
+        # Try to parse JSON response
+        import json
+        try:
+            response_text = response.text.strip()
+            if response_text.startswith('```json'):
+                response_text = response_text[7:-3]
+            elif response_text.startswith('```'):
+                response_text = response_text[3:-3]
+            
+            suggestion = json.loads(response_text)
+            
+            if 'heading' in suggestion and 'body' in suggestion:
+                return suggestion
+            else:
+                raise ValueError("Invalid suggestion format")
+                
+        except (json.JSONDecodeError, ValueError):
+            # Fallback to simple suggestion
+            selected_crop = random.choice(crops)['name']
+            temp = weather_data['current']['temperature'] if weather_data else 25
+            
+            return {
+                "heading": "Good morning farmer! 🌱",
+                "body": f"Check on your {selected_crop} today - with {temp}°C weather, it's a great day for farming!"
+            }
+            
+    except Exception as e:
+        print(f"Error generating daily suggestion: {e}")
+        # Simple fallback
+        selected_crop = random.choice(crops)['name']
+        return {
+            "heading": "Farm check time! 🚜",
+            "body": f"How's your {selected_crop} doing today? A quick inspection never hurts!"
+        }
+
+
+
+
+
+
+
+
 
 def get_weather_data(lat, lon):
     """Fetch current weather and 5-day forecast"""
@@ -180,7 +422,7 @@ def medical_chat():
         
         # Create prompt
         prompt = f"""
-        You are a friendly agricultural medical assistant. Answer health questions naturally.
+        You are a friendly agricultural medical assistant. Answer health questions naturally, engage with the user but keep the text short and clear.
 
         Previous conversation: {history}
 
@@ -382,7 +624,71 @@ def get_crops():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# Enhanced suggestions with weather integration
+
+
+
+
+
+
+
+
+
+@app.route('/getDailySuggestion', methods=['GET'])
+def get_daily_suggestion():
+    try:
+        user_id = request.args.get("userId")
+        lat = request.args.get('lat', 27.1767, type=float)
+        lon = request.args.get('lon', 78.0081, type=float)
+        
+        # Validate user_id
+        if not validate_user_id(user_id):
+            return jsonify({"error": "Valid userId is required"}), 400
+
+        # Update user activity
+        update_user_activity(user_id)
+
+        # Get crops from Firebase
+        crops_ref = db.collection("users").document(user_id).collection("crops").stream()
+        crops = []
+        current_date = datetime.now()
+        
+        for doc in crops_ref:
+            crop_data = doc.to_dict()
+            try:
+                sowed_date = datetime.strptime(crop_data.get('sowedDate', ''), '%Y-%m-%d')
+                days_old = (current_date - sowed_date).days
+                crops.append({
+                    'name': crop_data.get('name', 'Unknown Crop'),
+                    'type': crop_data.get('type', ''),
+                    'days_old': days_old
+                })
+            except (ValueError, KeyError):
+                crops.append({
+                    'name': crop_data.get('name', 'Unknown Crop'),
+                    'type': crop_data.get('type', ''),
+                    'days_old': 30
+                })
+
+        if not crops:
+            return jsonify({"error": "No crops found for this user. Please add crops first."}), 404
+
+        # Get weather data
+        weather_data = get_weather_data(lat, lon)
+        
+        # Generate daily suggestion using Gemini
+        suggestion = generate_daily_suggestion_with_gemini(crops, weather_data)
+
+        return jsonify({
+            "success": True,
+            "suggestion": suggestion
+        })
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": f"Failed to generate daily suggestion: {str(e)}"
+        }), 500
+
 @app.route('/getSuggestions', methods=['GET'])
 def get_suggestions():
     try:
@@ -397,192 +703,76 @@ def get_suggestions():
         # Update user activity
         update_user_activity(user_id)
 
-        # Get crops
+        # Get crops from Firebase
         crops_ref = db.collection("users").document(user_id).collection("crops").stream()
-        crops = [doc.to_dict() for doc in crops_ref]
+        crops = []
+        current_date = datetime.now()
+        
+        for doc in crops_ref:
+            crop_data = doc.to_dict()
+            try:
+                # Calculate days old
+                sowed_date = datetime.strptime(crop_data.get('sowedDate', ''), '%Y-%m-%d')
+                days_old = (current_date - sowed_date).days
+                
+                crops.append({
+                    'id': doc.id,
+                    'name': crop_data.get('name', 'Unknown Crop'),
+                    'type': crop_data.get('type', ''),
+                    'area': crop_data.get('area', ''),
+                    'days_old': days_old,
+                    'sowed_date': crop_data.get('sowedDate', '')
+                })
+            except (ValueError, KeyError):
+                # If date parsing fails, add with default days_old
+                crops.append({
+                    'id': doc.id,
+                    'name': crop_data.get('name', 'Unknown Crop'),
+                    'type': crop_data.get('type', ''),
+                    'area': crop_data.get('area', ''),
+                    'days_old': 30,  # Default
+                    'sowed_date': crop_data.get('sowedDate', '')
+                })
 
         if not crops:
-            return jsonify({"error": "No crops found for this user"}), 404
+            return jsonify({"error": "No crops found for this user. Please add crops first."}), 404
 
         # Get weather data
         weather_data = get_weather_data(lat, lon)
         
-        # Process crops
-        current_date = datetime.now()
-        crop_details = []
-        for crop in crops:
-            try:
-                sowed_date = datetime.strptime(crop['sowedDate'], '%Y-%m-%d')
-                days_old = (current_date - sowed_date).days
-                crop_details.append({
-                    'name': crop['name'],
-                    'area': crop['area'],
-                    'days_old': days_old,
-                    'sowed_date': crop['sowedDate']
-                })
-            except (ValueError, KeyError):
-                continue
-
-        if not crop_details:
-            return jsonify({"error": "No valid crops found"}), 404
-
-        # Create enhanced prompt with weather data
-        crop_lines = [f"- {crop['name']}: {crop['area']} acres, {crop['days_old']} days old" for crop in crop_details]
+        # Generate suggestions using Gemini
+        suggestions = generate_farming_suggestions_with_gemini(crops, weather_data)
         
-        weather_info = ""
-        if weather_data:
-            weather_info = f"""
-Current Weather:
-- Temperature: {weather_data['current']['temperature']}°C (feels like {weather_data['current']['feels_like']}°C)
-- Humidity: {weather_data['current']['humidity']}%
-- Condition: {weather_data['current']['description']}
-- Wind: {weather_data['current']['wind_speed']} m/s
-
-24-hour Forecast: {weather_data['forecast'][0]['description']}, {weather_data['forecast'][0]['temp']}°C
-"""
-
-        prompt = f"""Based on these crops and current weather conditions:
-
-CROPS:
-{chr(10).join(crop_lines)}
-
-{weather_info}
-
-Current date: {current_date.strftime('%Y-%m-%d')}
-
-Provide exactly 4 specific farming recommendations considering BOTH crop stages AND current weather:
-1. WEATHER-BASED URGENT ACTION: Most critical action needed based on current weather
-2. CROP CARE: Which crop needs immediate attention based on growth stage
-3. IRRIGATION: Watering advice based on weather conditions and crop needs
-4. PROTECTION: Weather protection or upcoming weather preparation
-
-Format each as a short, actionable card (max 25 words). Start with action verbs. Include specific crop names.
-
-Examples:
-- "Cover tomatoes tonight - temperature dropping to 15°C, protect young plants"
-- "Increase wheat watering - low humidity (45%) and high temperature stress"
-- "Apply fungicide to rice - high humidity (80%) increases disease risk"
-- "Prepare drainage for corn - heavy rain forecast in 24 hours"
-"""
-
-        # Generate suggestions
-        response = genai.GenerativeModel("gemini-1.5-flash").generate_content(prompt)
-        raw_output = response.text.strip()
-
-        # Parse suggestions
-        suggestions = []
-        lines = [line.strip() for line in raw_output.split('\n') if line.strip()]
+        # Format suggestions for response
+        formatted_suggestions = {}
+        suggestion_keys = ['first', 'second', 'third', 'fourth']
         
-        for line in lines:
-            cleaned = line.strip('1234567890.-•* ').strip()
-            if cleaned and len(cleaned) > 10:
-                suggestions.append(cleaned)
-
-        while len(suggestions) < 4:
-            suggestions.append("Monitor crop health daily")
-        
-        suggestions = suggestions[:4]
+        for i, suggestion in enumerate(suggestions):
+            key = suggestion_keys[i] if i < len(suggestion_keys) else f'suggestion_{i+1}'
+            formatted_suggestions[key] = suggestion
 
         return jsonify({
-            "suggestions": {
-                "weather_urgent": {
-                    "text": suggestions[0],
-                    "priority": "high",
-                    "category": "weather"
-                },
-                "crop_care": {
-                    "text": suggestions[1],
-                    "priority": "high", 
-                    "category": "care"
-                },
-                "irrigation": {
-                    "text": suggestions[2],
-                    "priority": "medium",
-                    "category": "watering"
-                },
-                "protection": {
-                    "text": suggestions[3],
-                    "priority": "medium",
-                    "category": "protection"
-                }
-            },
-            "weather": weather_data,
-            "generated_at": current_date.isoformat(),
-            "total_crops": len(crop_details),
-            "userId": user_id
+            "success": True,
+            "suggestions": formatted_suggestions
         })
 
     except Exception as e:
-        return jsonify({"error": f"Failed to generate suggestions: {str(e)}"}), 500
-
-# Chat history endpoints
-@app.route('/getChats', methods=['GET'])
-def get_chats():
-    try:
-        user_id = request.args.get('userId')
-        
-        # Validate user_id
-        if not validate_user_id(user_id):
-            return jsonify({"error": "Valid userId is required"}), 400
-
-        # Update user activity
-        update_user_activity(user_id)
-            
-        chats = db.collection("users").document(user_id).collection("chats")\
-                .order_by("createdAt", direction=firestore.Query.DESCENDING).stream()
-        
-        chat_list = []
-        for chat in chats:
-            data = chat.to_dict()
-            created_at = data.get("createdAt")
-            chat_list.append({
-                "chatId": chat.id,
-                "lastMessage": data.get("lastMessage", ""),
-                "createdAt": created_at.isoformat() if created_at else None,
-                "updatedAt": data.get("updatedAt", created_at).isoformat() if data.get("updatedAt") else None
-            })
-            
-        return jsonify({"chats": chat_list, "userId": user_id})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/getChat', methods=['GET'])
-def get_chat():
-    try:
-        user_id = request.args.get('userId')
-        chat_id = request.args.get('chatId')
-
-        # Validate user_id
-        if not validate_user_id(user_id):
-            return jsonify({"error": "Valid userId is required"}), 400
-            
-        if not chat_id:
-            return jsonify({"error": "Missing chatId"}), 400
-
-        # Update user activity
-        update_user_activity(user_id)
-
-        chat_doc = db.collection("users").document(user_id).collection("chats").document(chat_id).get()
-
-        if not chat_doc.exists:
-            return jsonify({"error": "Chat not found"}), 404
-
-        chat_data = chat_doc.to_dict()
-        messages = chat_data.get("messages", [])
-
-        for msg in messages:
-            if "timestamp" in msg:
-                msg["timestamp"] = msg["timestamp"].isoformat()
-
         return jsonify({
-            "chatId": chat_id,
-            "userId": user_id,
-            "createdAt": chat_data.get("createdAt").isoformat() if chat_data.get("createdAt") else None,
-            "updatedAt": chat_data.get("updatedAt").isoformat() if chat_data.get("updatedAt") else None,
-            "messages": messages
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+            "success": False,
+            "error": f"Failed to generate suggestions: {str(e)}"
+        }), 500
+    
+
+
+
+
+
+
+
+
+
+
+
 
 # Additional endpoints
 @app.route('/updateCrop', methods=['PUT'])
