@@ -28,7 +28,7 @@ firebase_admin.initialize_app(cred)
 db = firestore.client()
 
 # Load model
-disease_model = tf.keras.models.load_model("models/plant_disease_model.keras")
+disease_model = tf.keras.models.load_model("functions/models/plant_disease_model.keras")
 
 FRIENDLY_LABELS = {
     'Pepper__bell___Bacterial_spot': 'Bacterial spot on bell pepper',
