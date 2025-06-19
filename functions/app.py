@@ -1,4 +1,4 @@
-from tensorflow.keras.models import load_model
+import tensorflow as tf
 from tensorflow.keras.preprocessing import image
 import numpy as np
 import random
@@ -28,7 +28,7 @@ firebase_admin.initialize_app(cred)
 db = firestore.client()
 
 # Load model
-disease_model = load_model("models/plant_disease_model.keras")
+disease_model = tf.keras.models.load_model("models/plant_disease_model.keras")
 
 FRIENDLY_LABELS = {
     'Pepper__bell___Bacterial_spot': 'Bacterial spot on bell pepper',
