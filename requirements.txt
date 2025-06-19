@@ -3,8 +3,8 @@ Flask-CORS==4.0.0
 firebase-admin==6.4.0
 python-dotenv==1.0.1
 requests==2.31.0
-gunicorn==21.2.0
-tensorflow==2.14.0
+gunicorn
+tensorflow
 numpy==1.24.3
 Pillow==10.3.0
 google-generativeai==0.3.2
