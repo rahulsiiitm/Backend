@@ -359,6 +359,9 @@ def get_weather_data(lat, lon):
         print(f"❌ Weather API error: {e}")
         return None
 
+
+#Weather endpoint---------------------------------------------------------------------------------------------------------
+
 @app.route('/weather', methods=['GET'])
 def get_weather():
     try:
@@ -384,7 +387,10 @@ def get_weather():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
-# Chat endpoint
+
+
+
+# Chat endpoint---------------------------------------------------------------------------------------------------------
 @app.route('/chat', methods=['POST'])
 def medical_chat():
     try:
@@ -566,7 +572,7 @@ def analyze_image():
         return jsonify({'error': str(e)}), 500
 
 
-# Crop management endpoints
+# Crop management endpoints-------------------------------------------------------------------------------------------------------------
 @app.route('/addCrop', methods=['POST'])
 def add_crop():
     try:
@@ -598,6 +604,59 @@ def add_crop():
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    
+
+@app.route('/updateCrop', methods=['PUT'])
+def update_crop():
+    try:
+        data = request.get_json()
+        user_id = data.get('user_id') or data.get('userId')
+        crop_id = data.get('cropId')
+        crop_data = data.get('cropData')
+        
+        # Validate user_id
+        if not validate_user_id(user_id):
+            return jsonify({"error": "Valid user_id is required"}), 400
+        
+        if not crop_id or not crop_data:
+            return jsonify({"error": "Missing cropId or cropData"}), 400
+
+        # Update user activity
+        update_user_activity(user_id)
+
+        crop_data["updatedAt"] = datetime.now()
+        db.collection("users").document(user_id).collection("crops").document(crop_id).update(crop_data)
+
+        return jsonify({"message": "Crop updated successfully", "userId": user_id})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/deleteCrop', methods=['DELETE'])
+def delete_crop():
+    try:
+        if request.is_json:
+            data = request.get_json()
+            user_id = data.get('user_id') or data.get('userId')
+            crop_id = data.get("cropId")
+        else:
+            user_id = request.args.get("userId")
+            crop_id = request.args.get("cropId")
+            
+        # Validate user_id
+        if not validate_user_id(user_id):
+            return jsonify({"error": "Valid userId is required"}), 400
+
+        if not crop_id:
+            return jsonify({"error": "Missing cropId"}), 400
+
+        # Update user activity
+        update_user_activity(user_id)
+
+        db.collection("users").document(user_id).collection("crops").document(crop_id).delete()
+        return jsonify({"message": "Crop deleted successfully", "userId": user_id})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 
 @app.route('/getCrops', methods=['GET'])
 def get_crops():
@@ -639,7 +698,7 @@ def get_crops():
 
 
 
-
+#Suggestion endpoints-----------------------------------------------------------------------------------------------------------------
 
 @app.route('/getDailySuggestion', methods=['GET'])
 def get_daily_suggestion():
@@ -780,62 +839,7 @@ def get_suggestions():
 
 
 
-
-
-# Additional endpoints
-@app.route('/updateCrop', methods=['PUT'])
-def update_crop():
-    try:
-        data = request.get_json()
-        user_id = data.get('user_id') or data.get('userId')
-        crop_id = data.get('cropId')
-        crop_data = data.get('cropData')
-        
-        # Validate user_id
-        if not validate_user_id(user_id):
-            return jsonify({"error": "Valid user_id is required"}), 400
-        
-        if not crop_id or not crop_data:
-            return jsonify({"error": "Missing cropId or cropData"}), 400
-
-        # Update user activity
-        update_user_activity(user_id)
-
-        crop_data["updatedAt"] = datetime.now()
-        db.collection("users").document(user_id).collection("crops").document(crop_id).update(crop_data)
-
-        return jsonify({"message": "Crop updated successfully", "userId": user_id})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/deleteCrop', methods=['DELETE'])
-def delete_crop():
-    try:
-        if request.is_json:
-            data = request.get_json()
-            user_id = data.get('user_id') or data.get('userId')
-            crop_id = data.get("cropId")
-        else:
-            user_id = request.args.get("userId")
-            crop_id = request.args.get("cropId")
-            
-        # Validate user_id
-        if not validate_user_id(user_id):
-            return jsonify({"error": "Valid userId is required"}), 400
-
-        if not crop_id:
-            return jsonify({"error": "Missing cropId"}), 400
-
-        # Update user activity
-        update_user_activity(user_id)
-
-        db.collection("users").document(user_id).collection("crops").document(crop_id).delete()
-        return jsonify({"message": "Crop deleted successfully", "userId": user_id})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-    
-
-# Chat history endpoints
+# Chat history endpoints---------------------------------------------------------------------------------------------------
 @app.route('/getChats', methods=['GET'])
 def get_chats():
     try:
@@ -933,8 +937,107 @@ def delete_all_chats():
         })
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
+    
 
-# Health and info endpoints
+
+#User Profile and info endpoints---------------------------------------------------------------------------------------------------
+@app.route('/save_farmer_profile', methods=['POST'])
+def save_farmer_profile():
+    try:
+        data = request.json
+        user_id = data.get('userId')
+        if not user_id:
+            return jsonify({'error': 'userId is required'}), 400
+
+        profile_ref = db.collection('users').document(user_id).collection('profile').document('info')
+        existing_doc = profile_ref.get()
+
+        # ✅ Prevent overwrite if data already exists
+        if existing_doc.exists:
+            return jsonify({'message': 'Profile already exists. Use update endpoint.'}), 409
+
+        profile_data = {
+            'name': data.get('name', ''),
+            'phone': data.get('phone', ''),
+            'location': data.get('location', ''),
+            'language': data.get('language', ''),
+            'profilePhoto': data.get('profilePhoto', '')  # optional
+        }
+
+        profile_ref.set(profile_data)
+
+        return jsonify({'message': 'Profile saved successfully'}), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    
+
+@app.route('/get_farmer_profile', methods=['GET'])
+def get_farmer_profile():
+    try:
+        user_id = request.args.get('userId')
+        field = request.args.get('field')  # Optional
+
+        if not user_id:
+            return jsonify({'error': 'userId is required'}), 400
+
+        profile_ref = db.collection('users').document(user_id).collection('profile').document('info')
+        profile_doc = profile_ref.get()
+
+        if not profile_doc.exists:
+            return jsonify({'message': 'Profile not found'}), 404
+
+        profile_data = profile_doc.to_dict()
+
+        # If specific field requested
+        if field:
+            if field in profile_data:
+                return jsonify({field: profile_data[field]}), 200
+            else:
+                return jsonify({'error': f'Field "{field}" not found'}), 404
+
+        # Otherwise return full profile
+        return jsonify({
+            'userId': user_id,
+            'profile': profile_data
+        }), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    
+
+@app.route('/update_farmer_profile', methods=['POST'])
+def update_farmer_profile():
+    try:
+        data = request.json
+        user_id = data.get('userId')
+        updates = data.get('updates')
+
+        if not user_id or not updates:
+            return jsonify({'error': 'userId and updates are required'}), 400
+
+        profile_ref = db.collection('users').document(user_id).collection('profile').document('info')
+
+        # Check if profile exists before updating
+        if not profile_ref.get().exists:
+            return jsonify({'error': 'Profile not found. Use save endpoint instead.'}), 404
+
+        # Update only given fields
+        profile_ref.update(updates)
+
+        return jsonify({'message': 'Profile updated successfully'}), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+
+
+
+
+
+
+# Health and info endpoints------------------------------------------------------------------------------------------------
 @app.route('/', methods=['GET'])
 def home():
     return jsonify({
