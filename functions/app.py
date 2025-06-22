@@ -117,79 +117,37 @@ Forecast (next 24 hours):
         else:
             weather_text = "Weather data not available"
 
+        
         prompt = f"""
-You are an expert agricultural advisor. Based on the farmer's crops and current weather conditions, create a comprehensive farming dashboard with actionable insights.
+You are an expert agricultural advisor. Based on the farmer's crops and current weather conditions, provide 4 practical farming suggestions.
 
 Farmer's Crops:
 {crops_text}
 
 {weather_text}
 
-Please provide a detailed farming dashboard in JSON format with the following structure:
+Please provide exactly 4 specific, actionable farming suggestions. Each suggestion should:
+1. Be practical and immediately actionable
+2. Consider the current weather conditions
+3. Be specific to the crops the farmer is growing
+4. Include the crop name in the suggestion
+5. Be concise (1-2 sentences each)
 
-{{
-  "dashboard": {{
-    "today_task": {{
-      "title": "Today's Task",
-      "icon": "🧑‍🌾",
-      "tasks": [
-        // 2-3 urgent tasks for today based on weather and crop needs
-        {{
-          "crop": "crop_name",
-          "task": "specific actionable task"
-        }}
-      ]
-    }},
-    "upcoming": {{
-      "title": "Upcoming",
-      "icon": "📅", 
-      "events": [
-        // 2-3 upcoming farming activities in next 3-7 days
-        {{
-          "crop": "crop_name",
-          "task": "scheduled activity",
-          "due_in_days": number
-        }}
-      ]
-    }},
-    "crop_health": {{
-      "title": "Crop Health Overview",
-      "icon": "🩺",
-      "crops": [
-        // Status for each crop mentioned
-        {{
-          "name": "crop_name",
-          "status": "Healthy/Warning/Critical",
-          "issues": ["list of current issues if any"],
-          "water_level": "Optimal/Low/High"
-        }}
-      ]
-    }},
-    "smart_suggestions": {{
-      "title": "AI Suggestions", 
-      "icon": "🤖",
-      "suggestions": [
-        // 3-4 intelligent suggestions based on weather and crops
-        {{
-          "crop": "crop_name or All",
-          "suggestion": "weather-aware farming advice"
-        }}
-      ]
-    }}
+Format your response as a JSON array with 4 objects, each having:
+- "text": the suggestion text
+- "category": one of ["irrigation", "fertilizer", "protection", "care", "harvesting", "pest_control"]
+- "crop": the specific crop name mentioned
+- "priority": one of ["high", "medium", "low"]
+
+Example format:
+[
+  {{
+    "text": "Water your wheat early morning - temperature reaching 35°C today will stress the plants",
+    "category": "irrigation", 
+    "crop": "wheat",
+    "priority": "high"
   }}
-}}
-
-Guidelines:
-1. Today's tasks should be urgent and weather-dependent
-2. Upcoming events should include typical farming schedules (watering, fertilizing, harvesting, pest control)
-3. Crop health should reflect realistic conditions based on weather
-4. Smart suggestions should be specific and consider current weather patterns
-5. Use realistic crop names from the farmer's list
-6. Water levels should reflect current weather (dry = low, rainy = high/optimal)
-7. Include variety in task categories: irrigation, fertilizer, protection, harvesting, pest_control
-8. Make suggestions practical and immediately actionable
-
-Respond only with the JSON object, no additional text.
+]
 """
 
         model = genai.GenerativeModel('gemini-1.5-flash')
