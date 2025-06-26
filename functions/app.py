@@ -135,7 +135,7 @@ Please provide exactly 4 specific, actionable farming suggestions. Each suggesti
 
 Format your response as a JSON array with 4 objects, each having:
 - "text": the suggestion text
-- "category": one of ["irrigation", "fertilizer", "protection", "care", "harvesting", "pest_control"]
+- "category": one of ["irrigation", "protection", "care", "pest_control"]
 - "crop": the specific crop name mentioned
 - "priority": one of ["high", "medium", "low"]
 
