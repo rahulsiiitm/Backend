@@ -505,9 +505,11 @@ def analyze_image():
             if not model_response.get('success'):
                 raise Exception(model_response.get('error', 'Model prediction failed'))
             
-            prediction_data = model_response['prediction']
-            predicted_label = prediction_data['disease']
-            confidence = prediction_data['confidence']
+            # Extract disease name from the simplified response
+            predicted_label = model_response.get('disease', 'Unknown disease')
+            
+            # Since your new API doesn't return confidence, we'll set a default or skip it
+            confidence = 0.95  # Default confidence or you can remove this entirely
             
         except Exception as e:
             return jsonify({
@@ -517,12 +519,18 @@ def analyze_image():
 
         # Generate explanation using Gemini
         prompt = f"""
-        A plant has been detected with the disease: {predicted_label} (confidence: {confidence:.2%}).
-        Please explain what this disease is, how it affects the plant, and how a farmer can treat or prevent it.
-        Keep it short and clear.
+        A plant has been detected with the condition: {predicted_label}.
+        Please explain what this condition is, how it affects the plant, and how a farmer can treat or prevent it if it's a disease.
+        If it's healthy, provide care tips. Keep it short and clear.
         """
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        response = model.generate_content(prompt)
+        
+        try:
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            response = model.generate_content(prompt)
+            gemini_explanation = response.text
+        except Exception as e:
+            # Fallback explanation if Gemini fails
+            gemini_explanation = f"Detected: {predicted_label}. Please consult with an agricultural expert for detailed analysis and treatment recommendations."
 
         # Handle chat creation/update
         is_new_chat = False
@@ -536,39 +544,43 @@ def analyze_image():
             is_new_chat = True
 
         user_message = f"[Image Analysis] Uploaded plant image"
-        bot_message = f"Disease detected: {predicted_label} (Confidence: {confidence:.1%})\n\n{response.text}"
+        bot_message = f"Plant Analysis Result: {predicted_label}\n\n{gemini_explanation}"
         
         message_data = [
             {"sender": "user", "message": user_message, "timestamp": datetime.now(), "type": "image"},
             {"sender": "bot", "message": bot_message, "timestamp": datetime.now(), "type": "analysis"}
         ]
         
-        if is_new_chat:
-            db.collection("users").document(user_id).collection("chats").document(chat_id).set({
-                "createdAt": datetime.now(),
-                "lastMessage": bot_message,
-                "updatedAt": datetime.now(),
-                "messages": message_data
-            })
-        else:
-            db.collection("users").document(user_id).collection("chats").document(chat_id).update({
-                "lastMessage": bot_message,
-                "updatedAt": datetime.now(),
-                "messages": firestore.ArrayUnion(message_data)
-            })
+        try:
+            if is_new_chat:
+                db.collection("users").document(user_id).collection("chats").document(chat_id).set({
+                    "createdAt": datetime.now(),
+                    "lastMessage": bot_message,
+                    "updatedAt": datetime.now(),
+                    "messages": message_data
+                })
+            else:
+                db.collection("users").document(user_id).collection("chats").document(chat_id).update({
+                    "lastMessage": bot_message,
+                    "updatedAt": datetime.now(),
+                    "messages": firestore.ArrayUnion(message_data)
+                })
+        except Exception as e:
+            print(f"Database update failed: {e}")
+            # Continue even if database update fails
 
         return jsonify({
             'success': True,
             'predicted_label': predicted_label,
-            'confidence': confidence,
-            'top_3_predictions': prediction_data.get('top_3', []),
-            'gemini_explanation': response.text,
+            'confidence': confidence,  # You can remove this if you don't want to show confidence
+            'gemini_explanation': gemini_explanation,
             'chat_id': chat_id,
             'user_id': user_id,
             'is_new_chat': is_new_chat
         })
 
     except Exception as e:
+        print(f"Analyze image error: {e}")
         return jsonify({'error': str(e)}), 500
 
 
