@@ -509,7 +509,7 @@ def analyze_image():
             crop_result = crop_response.text.strip().lower()
             
             # Check if the image is identified as a crop
-            if "crop" not in crop_result or "not crop" in crop_result:
+            if crop_result != "crop":
                 # Handle chat creation for non-crop response
                 is_new_chat = False
                 if chat_id:
