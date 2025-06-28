@@ -1006,37 +1006,6 @@ def delete_all_chats():
 
 
 #User Profile and info endpoints---------------------------------------------------------------------------------------------------
-@app.route('/save_farmer_profile', methods=['POST'])
-def save_farmer_profile():
-    try:
-        data = request.json
-        user_id = data.get('userId')
-        if not user_id:
-            return jsonify({'error': 'userId is required'}), 400
-
-        profile_ref = db.collection('users').document(user_id).collection('profile').document('info')
-        existing_doc = profile_ref.get()
-
-        # ✅ Prevent overwrite if data already exists
-        if existing_doc.exists:
-            return jsonify({'message': 'Profile already exists. Use update endpoint.'}), 409
-
-        profile_data = {
-            'name': data.get('name', ''),
-            'phone': data.get('phone', ''),
-            'location': data.get('location', ''),
-            'language': data.get('language', ''),
-            'profilePhoto': data.get('profilePhoto', '')  # optional
-        }
-
-        profile_ref.set(profile_data)
-
-        return jsonify({'message': 'Profile saved successfully'}), 200
-
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-    
-
 @app.route('/get_farmer_profile', methods=['GET'])
 def get_farmer_profile():
     try:
@@ -1083,17 +1052,27 @@ def update_farmer_profile():
 
         profile_ref = db.collection('users').document(user_id).collection('profile').document('info')
 
-        # Check if profile exists before updating
+        # Check if profile exists
         if not profile_ref.get().exists:
-            return jsonify({'error': 'Profile not found. Use save endpoint instead.'}), 404
+            # Create a new profile with all expected keys
+            default_fields = {
+                'name': '',
+                'phone': '',
+                'location': '',
+                'language': '',
+                'profilePhoto': ''
+            }
+            default_fields.update(updates)
+            profile_ref.set(default_fields)
+            return jsonify({'message': 'Profile did not exist. Created new profile.'}), 201
 
-        # Update only given fields
+        # Profile exists — update only given fields
         profile_ref.update(updates)
-
         return jsonify({'message': 'Profile updated successfully'}), 200
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
 
 
 
