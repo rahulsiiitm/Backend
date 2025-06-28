@@ -472,115 +472,168 @@ def medical_chat():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-# Modified image analysis endpoint - now calls HF API
 @app.route('/analyze_image', methods=['POST'])
 def analyze_image():
     try:
-        if 'image' not in request.files:
-            return jsonify({'error': 'No image file provided'}), 400
-
         image_file = request.files['image']
-        if image_file.filename == '':
-            return jsonify({'error': 'Empty filename'}), 400
-
         form_data = dict(request.form)
-        user_id = form_data.get('user_id') or form_data.get('userId')
-        chat_id = form_data.get('chat_id') or form_data.get('chatId')
+        user_id = form_data.get('user_id')
+        chat_id = form_data.get('chat_id')
 
-        # Validate user_id
         if not validate_user_id(user_id):
             return jsonify({'error': 'Valid user_id is required'}), 400
 
-        # Update user activity
         update_user_activity(user_id)
 
-        # Call the Hugging Face model API
+        # First, check if the image is a crop using Gemini
         try:
-            # Reset file pointer to beginning
+            # Reset file pointer to beginning for Gemini analysis
             image_file.seek(0)
             
-            # Call HF model API
-            model_response = call_hf_model_api(image_file, is_file=True)
+            # Upload image to Gemini for crop validation
+            model = genai.GenerativeModel('gemini-1.5-flash')
             
-            if not model_response.get('success'):
-                raise Exception(model_response.get('error', 'Model prediction failed'))
+            # Convert image file to format Gemini can process
+            image_data = image_file.read()
+            image_file.seek(0)  # Reset for potential later use
             
-            # Extract disease name from the simplified response
-            predicted_label = model_response.get('disease', 'Unknown disease')
+            # Create image part for Gemini
+            image_part = {
+                "mime_type": image_file.content_type,
+                "data": image_data
+            }
             
-            # Since your new API doesn't return confidence, we'll set a default or skip it
-            confidence = 0.95  # Default confidence or you can remove this entirely
+            crop_validation_prompt = "Look at this image and respond with only 'crop' if this is an image of a crop/plant/agricultural product, or 'not crop' if it's not. Give only one of these two responses, nothing else."
             
+            crop_response = model.generate_content([crop_validation_prompt, image_part])
+            crop_result = crop_response.text.strip().lower()
+            
+            # Check if the image is identified as a crop
+            if "crop" not in crop_result or "not crop" in crop_result:
+                # Handle chat creation for non-crop response
+                is_new_chat = False
+                if chat_id:
+                    chat_doc = db.collection("users").document(user_id).collection("chats").document(chat_id).get()
+                    if not chat_doc.exists:
+                        chat_id = None
+                        
+                if not chat_id:
+                    chat_id = str(uuid.uuid4())
+                    is_new_chat = True
+
+                user_message = f"[Image Analysis] Uploaded image"
+                bot_message = "The uploaded image does not appear to be a crop or plant. Please upload an image of a crop or plant for analysis."
+                
+                message_data = [
+                    {"sender": "user", "message": user_message, "timestamp": datetime.now(), "type": "image"},
+                    {"sender": "bot", "message": bot_message, "timestamp": datetime.now(), "type": "error"}
+                ]
+                
+                try:
+                    if is_new_chat:
+                        db.collection("users").document(user_id).collection("chats").document(chat_id).set({
+                            "createdAt": datetime.now(),
+                            "lastMessage": bot_message,
+                            "updatedAt": datetime.now(),
+                            "messages": message_data
+                        })
+                    else:
+                        db.collection("users").document(user_id).collection("chats").document(chat_id).update({
+                            "lastMessage": bot_message,
+                            "updatedAt": datetime.now(),
+                            "messages": firestore.ArrayUnion(message_data)
+                        })
+                except Exception as e:
+                    pass  # Continue even if database update fails
+
+                return jsonify({
+                    'success': False,
+                    'error': 'Not a crop image',
+                    'message': 'The uploaded image does not appear to be a crop or plant. Please upload an image of a crop or plant for analysis.',
+                    'chat_id': chat_id,
+                    'user_id': user_id,
+                    'is_new_chat': is_new_chat
+                })
+                
         except Exception as e:
             return jsonify({
                 'success': False,
-                'error': f'Model prediction failed: {str(e)}'
+                'error': f'Crop validation failed: {str(e)}'
             }), 500
 
-        # Generate explanation using Gemini
-        prompt = f"""
-        A plant has been detected with the condition: {predicted_label}.
-        Please explain what this condition is, how it affects the plant, and how a farmer can treat or prevent it if it's a disease.
-        If it's healthy, provide care tips. Keep it short and clear.
-        """
-        
-        try:
-            model = genai.GenerativeModel('gemini-1.5-flash')
-            response = model.generate_content(prompt)
-            gemini_explanation = response.text
-        except Exception as e:
-            # Fallback explanation if Gemini fails
-            gemini_explanation = f"Detected: {predicted_label}. Please consult with an agricultural expert for detailed analysis and treatment recommendations."
+        # If we reach here, the image is identified as a crop - proceed with analysis
+        if True:  # This if statement wraps the original functionality as requested
+            # Call the Hugging Face model API
+            model_response = call_hf_model_api(image_file, is_file=True)
+            
+            if not model_response.get('success'):
+                return jsonify({
+                    'success': False,
+                    'error': f'Model prediction failed: {model_response.get("error", "Unknown error")}'
+                }), 500
+            
+            predicted_label = model_response.get('disease', 'Unknown disease')
 
-        # Handle chat creation/update
-        is_new_chat = False
-        if chat_id:
-            chat_doc = db.collection("users").document(user_id).collection("chats").document(chat_id).get()
-            if not chat_doc.exists:
-                chat_id = None
-                
-        if not chat_id:
-            chat_id = str(uuid.uuid4())
-            is_new_chat = True
+            # Generate explanation using Gemini
+            prompt = f"""
+            A plant has been detected with the condition: {predicted_label}.
+            Please explain what this condition is, how it affects the plant, and how a farmer can treat or prevent it if it's a disease.
+            If it's healthy, provide care tips. Keep it short and clear.
+            """
+            
+            try:
+                model = genai.GenerativeModel('gemini-1.5-flash')
+                response = model.generate_content(prompt)
+                gemini_explanation = response.text
+            except Exception as e:
+                gemini_explanation = f"Detected: {predicted_label}. Please consult with an agricultural expert for detailed analysis and treatment recommendations."
 
-        user_message = f"[Image Analysis] Uploaded plant image"
-        bot_message = f"Plant Analysis Result: {predicted_label}\n\n{gemini_explanation}"
-        
-        message_data = [
-            {"sender": "user", "message": user_message, "timestamp": datetime.now(), "type": "image"},
-            {"sender": "bot", "message": bot_message, "timestamp": datetime.now(), "type": "analysis"}
-        ]
-        
-        try:
-            if is_new_chat:
-                db.collection("users").document(user_id).collection("chats").document(chat_id).set({
-                    "createdAt": datetime.now(),
-                    "lastMessage": bot_message,
-                    "updatedAt": datetime.now(),
-                    "messages": message_data
-                })
-            else:
-                db.collection("users").document(user_id).collection("chats").document(chat_id).update({
-                    "lastMessage": bot_message,
-                    "updatedAt": datetime.now(),
-                    "messages": firestore.ArrayUnion(message_data)
-                })
-        except Exception as e:
-            print(f"Database update failed: {e}")
-            # Continue even if database update fails
+            # Handle chat creation/update
+            is_new_chat = False
+            if chat_id:
+                chat_doc = db.collection("users").document(user_id).collection("chats").document(chat_id).get()
+                if not chat_doc.exists:
+                    chat_id = None
+                    
+            if not chat_id:
+                chat_id = str(uuid.uuid4())
+                is_new_chat = True
 
-        return jsonify({
-            'success': True,
-            'predicted_label': predicted_label,
-            'confidence': confidence,  # You can remove this if you don't want to show confidence
-            'gemini_explanation': gemini_explanation,
-            'chat_id': chat_id,
-            'user_id': user_id,
-            'is_new_chat': is_new_chat
-        })
+            user_message = f"[Image Analysis] Uploaded plant image"
+            bot_message = f"Plant Analysis Result: {predicted_label}\n\n{gemini_explanation}"
+            
+            message_data = [
+                {"sender": "user", "message": user_message, "timestamp": datetime.now(), "type": "image"},
+                {"sender": "bot", "message": bot_message, "timestamp": datetime.now(), "type": "analysis"}
+            ]
+            
+            try:
+                if is_new_chat:
+                    db.collection("users").document(user_id).collection("chats").document(chat_id).set({
+                        "createdAt": datetime.now(),
+                        "lastMessage": bot_message,
+                        "updatedAt": datetime.now(),
+                        "messages": message_data
+                    })
+                else:
+                    db.collection("users").document(user_id).collection("chats").document(chat_id).update({
+                        "lastMessage": bot_message,
+                        "updatedAt": datetime.now(),
+                        "messages": firestore.ArrayUnion(message_data)
+                    })
+            except Exception as e:
+                pass  # Continue even if database update fails
+
+            return jsonify({
+                'success': True,
+                'predicted_label': predicted_label,
+                'gemini_explanation': gemini_explanation,
+                'chat_id': chat_id,
+                'user_id': user_id,
+                'is_new_chat': is_new_chat
+            })
 
     except Exception as e:
-        print(f"Analyze image error: {e}")
         return jsonify({'error': str(e)}), 500
 
 
