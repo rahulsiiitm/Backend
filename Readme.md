@@ -4,6 +4,15 @@ A Flask-based hobby project exploring AI-powered agriculture! This backend API c
 
 > **Personal Learning Project** - Combining my interests of AI with real-time projects
 
+## Project Structure
+
+Backend/
+├── functions/
+│   └── app.py          # Main Flask application
+│   └── requirements.txt    # Python dependencies
+├── .env               # Environment variables
+└── README.md          # This file
+
 ## Features
 
 - **Plant Disease Detection**
