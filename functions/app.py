@@ -10,10 +10,8 @@ import uuid
 from dotenv import load_dotenv
 import json
 
-# Load environment variables from .env file
 load_dotenv()
 
-# Initialize Flask app
 app = Flask(__name__)
 CORS(app)
 
@@ -26,7 +24,7 @@ db = firestore.client()
 # Configure APIs
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
 OPENWEATHER_API_KEY = os.environ.get('OPENWEATHER_API_KEY')
-HF_MODEL_API_URL = os.environ.get('HF_MODEL_API_URL')  # Add your Hugging Face model URL
+HF_MODEL_API_URL = os.environ.get('HF_MODEL_API_URL')
 
 if not GEMINI_API_KEY:
     print("❌ Error: GEMINI_API_KEY not found")
@@ -61,7 +59,6 @@ def call_hf_model_api(image_data, is_file=True):
             raise Exception("Hugging Face model API URL not configured")
         
         if is_file:
-            # Send as file upload
             files = {'image': image_data}
             response = requests.post(
                 f"{HF_MODEL_API_URL}/predict",
@@ -69,7 +66,6 @@ def call_hf_model_api(image_data, is_file=True):
                 timeout=30
             )
         else:
-            # Send as base64 JSON
             headers = {'Content-Type': 'application/json'}
             data = {'image': image_data}
             response = requests.post(
@@ -92,14 +88,12 @@ def call_hf_model_api(image_data, is_file=True):
 def generate_farming_suggestions_with_gemini(crops, weather_data):
     """Generate farming suggestions using Gemini AI based on user's actual crops and weather"""
     try:
-        # Prepare crop information
         crop_info = []
         for crop in crops:
             crop_info.append(f"- {crop['name']} ({crop.get('type', 'unknown type')}, planted {crop['days_old']} days ago)")
         
         crops_text = "\n".join(crop_info)
-        
-        # Prepare weather information
+
         if weather_data:
             current_weather = weather_data['current']
             weather_text = f"""
@@ -155,7 +149,6 @@ Example format:
         
         # Try to parse JSON response
         try:
-            # Clean the response text to extract JSON
             response_text = response.text.strip()
             if response_text.startswith('```json'):
                 response_text = response_text[7:-3]
@@ -166,7 +159,7 @@ Example format:
             
             # Validate the response format
             if isinstance(suggestions, list) and len(suggestions) >= 4:
-                return suggestions[:4]  # Return only first 4
+                return suggestions[:4]
             else:
                 raise ValueError("Invalid suggestion format")
                 
@@ -251,11 +244,9 @@ def generate_daily_suggestion_with_gemini(crops, weather_data):
     """Generate a single daily suggestion using Gemini"""
     import random
     try:
-        # Prepare crop information
         crop_names = [crop['name'] for crop in crops]
         crops_text = ", ".join(crop_names)
         
-        # Prepare weather information
         if weather_data:
             current_weather = weather_data['current']
             weather_text = f"Temperature: {current_weather['temperature']}°C, Humidity: {current_weather['humidity']}%, Weather: {current_weather['description']}"
@@ -285,7 +276,6 @@ Format:
         model = genai.GenerativeModel('gemini-1.5-flash')
         response = model.generate_content(prompt)
         
-        # Try to parse JSON response
         try:
             response_text = response.text.strip()
             if response_text.startswith('```json'):
@@ -301,7 +291,6 @@ Format:
                 raise ValueError("Invalid suggestion format")
                 
         except (json.JSONDecodeError, ValueError):
-            # Fallback to simple suggestion
             selected_crop = random.choice(crops)['name']
             temp = weather_data['current']['temperature'] if weather_data else 25
             
@@ -328,7 +317,6 @@ def get_weather_data(lat, lon):
         current_response.raise_for_status()
         current_data = current_response.json()
         
-        # Forecast (next 5 days in 3-hour intervals)
         forecast_url = f"http://api.openweathermap.org/data/2.5/forecast?lat={lat}&lon={lon}&appid={OPENWEATHER_API_KEY}&units=metric"
         forecast_response = requests.get(forecast_url, timeout=10)
         forecast_response.raise_for_status()
@@ -351,7 +339,7 @@ def get_weather_data(lat, lon):
                     'description': item['weather'][0]['description'],
                     'rain': item.get('rain', {}).get('3h', 0)
                 }
-                for item in forecast_data['list'][:8]  # Next 24 hours
+                for item in forecast_data['list'][:8]
             ]
         }
 
@@ -424,8 +412,7 @@ def medical_chat():
         if not chat_id:
             chat_id = str(uuid.uuid4())
             is_new_chat = True
-        
-        # Create prompt
+
         prompt = f"""
         You are a friendly agricultural medical assistant. Answer health questions naturally, engage with the user but keep the text short and clear.
 
@@ -435,8 +422,7 @@ def medical_chat():
         
         Respond helpfully but always remind users to consult doctors for serious concerns.
         """
-        
-        # Generate response
+
         model = genai.GenerativeModel('gemini-1.5-flash')
         response = model.generate_content(prompt)
         bot_response = response.text
@@ -485,19 +471,13 @@ def analyze_image():
 
         update_user_activity(user_id)
 
-        # First, check if the image is a crop using Gemini
         try:
-            # Reset file pointer to beginning for Gemini analysis
             image_file.seek(0)
-            
-            # Upload image to Gemini for crop validation
             model = genai.GenerativeModel('gemini-1.5-flash')
             
-            # Convert image file to format Gemini can process
             image_data = image_file.read()
-            image_file.seek(0)  # Reset for potential later use
+            image_file.seek(0)
             
-            # Create image part for Gemini
             image_part = {
                 "mime_type": image_file.content_type,
                 "data": image_data
@@ -508,9 +488,8 @@ def analyze_image():
             crop_response = model.generate_content([crop_validation_prompt, image_part])
             crop_result = crop_response.text.strip().lower()
             
-            # Check if the image is identified as a crop
+            # Checking if the image is identified as a crop
             if crop_result != "crop":
-                # Handle chat creation for non-crop response
                 is_new_chat = False
                 if chat_id:
                     chat_doc = db.collection("users").document(user_id).collection("chats").document(chat_id).get()
@@ -544,7 +523,7 @@ def analyze_image():
                             "messages": firestore.ArrayUnion(message_data)
                         })
                 except Exception as e:
-                    pass  # Continue even if database update fails
+                    pass
 
                 return jsonify({
                     'success': False,
@@ -561,9 +540,8 @@ def analyze_image():
                 'error': f'Crop validation failed: {str(e)}'
             }), 500
 
-        # If we reach here, the image is identified as a crop - proceed with analysis
-        if True:  # This if statement wraps the original functionality as requested
-            # Call the Hugging Face model API
+        if True:
+            # Calling the Hugging Face model API
             model_response = call_hf_model_api(image_file, is_file=True)
             
             if not model_response.get('success'):
@@ -574,7 +552,6 @@ def analyze_image():
             
             predicted_label = model_response.get('disease', 'Unknown disease')
 
-            # Generate explanation using Gemini
             prompt = f"""
             A plant has been detected with the condition: {predicted_label}.
             Please explain what this condition is, how it affects the plant, and how a farmer can treat or prevent it if it's a disease.
@@ -588,7 +565,6 @@ def analyze_image():
             except Exception as e:
                 gemini_explanation = f"Detected: {predicted_label}. Please consult with an agricultural expert for detailed analysis and treatment recommendations."
 
-            # Handle chat creation/update
             is_new_chat = False
             if chat_id:
                 chat_doc = db.collection("users").document(user_id).collection("chats").document(chat_id).get()
@@ -622,7 +598,7 @@ def analyze_image():
                         "messages": firestore.ArrayUnion(message_data)
                     })
             except Exception as e:
-                pass  # Continue even if database update fails
+                pass
 
             return jsonify({
                 'success': True,
@@ -652,7 +628,6 @@ def add_crop():
         if not crop_data_list or not isinstance(crop_data_list, list):
             return jsonify({"error": "cropData must be a non-empty list"}), 400
 
-        # Update user activity
         update_user_activity(user_id)
 
         added_crops = []
@@ -686,7 +661,6 @@ def update_crop():
         if not crop_id or not crop_data:
             return jsonify({"error": "Missing cropId or cropData"}), 400
 
-        # Update user activity
         update_user_activity(user_id)
 
         crop_data["updatedAt"] = datetime.now()
@@ -714,7 +688,6 @@ def delete_crop():
         if not crop_id:
             return jsonify({"error": "Missing cropId"}), 400
 
-        # Update user activity
         update_user_activity(user_id)
 
         db.collection("users").document(user_id).collection("crops").document(crop_id).delete()
@@ -732,7 +705,6 @@ def get_crops():
         if not validate_user_id(user_id):
             return jsonify({"error": "Valid userId is required"}), 400
 
-        # Update user activity
         update_user_activity(user_id)
 
         crops_ref = db.collection("users").document(user_id).collection("crops")
@@ -776,7 +748,6 @@ def get_daily_suggestion():
         if not validate_user_id(user_id):
             return jsonify({"error": "Valid userId is required"}), 400
 
-        # Update user activity
         update_user_activity(user_id)
 
         # Get crops from Firebase
@@ -804,10 +775,8 @@ def get_daily_suggestion():
         if not crops:
             return jsonify({"error": "No crops found for this user. Please add crops first."}), 404
 
-        # Get weather data
         weather_data = get_weather_data(lat, lon)
-        
-        # Generate daily suggestion using Gemini
+
         suggestion = generate_daily_suggestion_with_gemini(crops, weather_data)
 
         return jsonify({
@@ -832,10 +801,8 @@ def get_suggestions():
         if not validate_user_id(user_id):
             return jsonify({"error": "Valid userId is required"}), 400
 
-        # Update user activity
         update_user_activity(user_id)
 
-        # Get crops from Firebase
         crops_ref = db.collection("users").document(user_id).collection("crops").stream()
         crops = []
         current_date = datetime.now()
@@ -843,7 +810,6 @@ def get_suggestions():
         for doc in crops_ref:
             crop_data = doc.to_dict()
             try:
-                # Calculate days old
                 sowed_date = datetime.strptime(crop_data.get('sowedDate', ''), '%Y-%m-%d')
                 days_old = (current_date - sowed_date).days
                 
@@ -856,26 +822,22 @@ def get_suggestions():
                     'sowed_date': crop_data.get('sowedDate', '')
                 })
             except (ValueError, KeyError):
-                # If date parsing fails, add with default days_old
                 crops.append({
                     'id': doc.id,
                     'name': crop_data.get('name', 'Unknown Crop'),
                     'type': crop_data.get('type', ''),
                     'area': crop_data.get('area', ''),
-                    'days_old': 30,  # Default
+                    'days_old': 30,
                     'sowed_date': crop_data.get('sowedDate', '')
                 })
 
         if not crops:
             return jsonify({"error": "No crops found for this user. Please add crops first."}), 404
 
-        # Get weather data
         weather_data = get_weather_data(lat, lon)
-        
-        # Generate suggestions using Gemini
+
         suggestions = generate_farming_suggestions_with_gemini(crops, weather_data)
-        
-        # Format suggestions for response
+
         formatted_suggestions = {}
         suggestion_keys = ['first', 'second', 'third', 'fourth']
         
@@ -914,7 +876,6 @@ def get_chats():
         if not validate_user_id(user_id):
             return jsonify({"error": "Valid userId is required"}), 400
 
-        # Update user activity
         update_user_activity(user_id)
             
         chats = db.collection("users").document(user_id).collection("chats")\
@@ -948,7 +909,6 @@ def get_chat():
         if not chat_id:
             return jsonify({"error": "Missing chatId"}), 400
 
-        # Update user activity
         update_user_activity(user_id)
 
         chat_doc = db.collection("users").document(user_id).collection("chats").document(chat_id).get()
@@ -986,7 +946,6 @@ def delete_all_chats():
         if not validate_user_id(user_id):
             return jsonify({"error": "Valid userId is required"}), 400
 
-        # Update user activity
         update_user_activity(user_id)
 
         chat_docs = db.collection("users").document(user_id).collection("chats").stream()
@@ -1023,14 +982,12 @@ def get_farmer_profile():
 
         profile_data = profile_doc.to_dict()
 
-        # If specific field requested
         if field:
             if field in profile_data:
                 return jsonify({field: profile_data[field]}), 200
             else:
                 return jsonify({'error': f'Field "{field}" not found'}), 404
 
-        # Otherwise return full profile
         return jsonify({
             'userId': user_id,
             'profile': profile_data
@@ -1052,9 +1009,8 @@ def update_farmer_profile():
 
         profile_ref = db.collection('users').document(user_id).collection('profile').document('info')
 
-        # Check if profile exists
+        # Checking if profile exists
         if not profile_ref.get().exists:
-            # Create a new profile with all expected keys
             default_fields = {
                 'name': '',
                 'phone': '',
@@ -1066,7 +1022,6 @@ def update_farmer_profile():
             profile_ref.set(default_fields)
             return jsonify({'message': 'Profile did not exist. Created new profile.'}), 201
 
-        # Profile exists — update only given fields
         profile_ref.update(updates)
         return jsonify({'message': 'Profile updated successfully'}), 200
 
