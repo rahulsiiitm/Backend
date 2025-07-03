@@ -1,160 +1,336 @@
-# 🌾 Agricultural Advisory System - Backend
+# AgriHive - Agricultural Advisory System 🌱
 
-A Flask-based backend API for agricultural management with AI-powered plant disease detection, weather-based farming suggestions, and crop management.
+A Flask-based hobby project exploring AI-powered agriculture! This backend API combines plant disease detection using my custom-trained model, weather-based farming suggestions, and comprehensive crop management. Built as a personal learning project to explore agricultural technology and AI integration.
 
-## ✨ Features
+> **Personal Learning Project** - Combining my interests of AI with real-time projects
 
-- **Plant Disease Detection** - AI model analyzes plant images and identifies diseases
-- **Weather-Based Suggestions** - Smart farming recommendations based on current weather
-- **Agricultural Chatbot** - AI assistant for farming queries using Gemini
-- **Crop Management** - Add, update, and track your crops
-- **Daily Suggestions** - Friendly daily farming tips
+## Project Structure
+```
+Backend/
+├── functions/
+│   └── app.py          # Main Flask application
+│   └── requirements.txt    # Python dependencies
+├── .env               # Environment variables
+└── README.md          # This file
+```
+## Features
 
-## 🛠️ Tech Stack
+- **Plant Disease Detection**
+- **Weather-Based Suggestions**
+- **Agricultural Chatbot**
+- **Crop Management**
+- **Daily Suggestions**
+- **Chat History**
 
-- **Flask** - Web framework
-- **TensorFlow/Keras** - Plant disease detection model
-- **Google Gemini AI** - Chat assistant and explanations
+## Technology Stack
+
+- **Flask** - Web framework with CORS support
+- **Custom AI Model** - 13-class plant disease detection model (hosted on Hugging Face)
+- **Google Gemini AI** - Chat assistant and agricultural explanations
 - **Firebase Firestore** - Database for users, crops, and chat history
-- **OpenWeather API** - Real-time weather data
+- **OpenWeather API** - Real-time weather data and forecasts
+- **Render** - Cloud hosting platform
 
-## 📋 Prerequisites
+
+## Prerequisites
 
 - Python 3.8+
 - Firebase project with Firestore enabled
 - Google Gemini API key
 - OpenWeather API key
+- Custom Hugging Face model endpoint
 
-## ⚙️ Setup
+## Installation & Setup
 
-1. **Clone and install dependencies:**
+### Local Development
+
+1. **Clone and install:**
 ```bash
-pip install flask flask-cors tensorflow google-generativeai firebase-admin requests python-dotenv numpy
+git clone <repository-url>
+cd agricultural-advisory-system
+pip install -r requirements.txt
 ```
 
-2. **Environment variables (.env file):**
-```
+2. **Environment variables (.env):**
+```env
 GEMINI_API_KEY=your_gemini_api_key
 OPENWEATHER_API_KEY=your_openweather_api_key
+HF_MODEL_API_URL=your_model_api_url
+FIREBASE_KEY=your_firebase_service_account_json_string
 ```
 
 3. **Firebase setup:**
-   - Place your `firebase-key.json` in the project root
-   - Ensure Firestore is enabled
+   - Create Firebase project with Firestore enabled
+   - Generate service account key
+   - Add to environment variables
 
-4. **Add your trained model:**
-   - Place your `plant_disease_model.keras` in `/models/` folder
+4. **Run the application:**
+```bash
+python app.py  # Runs on http://localhost:5000
+```
 
-## 🚀 API Endpoints
+### Production Deployment
 
-### Chat & Analysis
-- `POST /chat` - Chat with AI assistant
-- `POST /analyze_image` - Analyze plant disease from image
-- `GET /getDailySuggestion` - Get single friendly daily tip
+1. Connect GitHub repository to Render
+2. Configure environment variables in Render dashboard
+3. Auto-deploy on push to main branch
+
+## API Endpoints
+
+### Base URLs
+- **Local**: `http://localhost:5000`
+- **Production**: `https://your-app-name.onrender.com`
+
+### Chat & AI Analysis
+- `POST /chat` - Interactive chat with AI assistant
+- `POST /analyze_image` - Plant disease detection using custom 13-class model
 
 ### Crop Management
-- `POST /addCrop` - Add new crops
-- `GET /getCrops` - Get user's crops
-- `PUT /updateCrop` - Update crop details
-- `DELETE /deleteCrop` - Delete crop
+- `POST /addCrop` - Add new crops to collection
+- `GET /getCrops` - Retrieve user's crop data
+- `PUT /updateCrop` - Update existing crop information
+- `DELETE /deleteCrop` - Remove crops from collection
 
-### Suggestions & Weather
-- `GET /getSuggestions` - Get 4 farming suggestions
-- `GET /weather` - Get weather data for location
+### Weather & Suggestions
+- `GET /getSuggestions` - Generate 4 weather-based farming suggestions
+- `GET /getDailySuggestion` - Get personalized daily farming tip
+- `GET /weather` - Fetch current weather and forecast data
 
-### Chat History
-- `GET /getChats` - Get chat history
-- `GET /getChat` - Get specific chat
-- `DELETE /deleteAllChats` - Delete all chats
+### Chat Management
+- `GET /getChats` - Retrieve chat history
+- `GET /getChat` - Get specific chat conversation
+- `DELETE /deleteAllChats` - Clear all chat history
 
-## 📝 Usage Examples
+### User Profile
+- `GET /get_farmer_profile` - Retrieve user profile information
+- `POST /update_farmer_profile` - Update user profile data
 
-### Daily Suggestion
+### System Health
+- `GET /` - API information and available endpoints
+- `GET /health` - System health check
+
+## Usage Examples
+
+### Adding Crops
 ```bash
-GET /getDailySuggestion?userId=123&lat=27.1767&lon=78.0081
+POST /addCrop
+Content-Type: application/json
+
+{
+  "user_id": "user123",
+  "cropData": [
+    {
+      "name": "Tomato",
+      "type": "Vegetable",
+      "area": "2 acres",
+      "sowedDate": "2024-01-15"
+    }
+  ]
+}
 ```
-Response:
+
+### Disease Detection with Custom Model
+```bash
+POST /analyze_image
+Content-Type: multipart/form-data
+
+FormData:
+- image: [plant_image_file]
+- user_id: user123
+- chat_id: optional_existing_chat_id
+```
+
+### Getting Weather-Based Suggestions
+```bash
+GET /getSuggestions?userId=user123&lat=27.1767&lon=78.0081
+```
+
+### AI Chat Interaction
+```bash
+POST /chat
+Content-Type: application/json
+
+{
+  "user_id": "user123",
+  "message": "How should I treat tomato blight?",
+  "chat_id": "optional_existing_chat_id"
+}
+```
+
+## My Custom Plant Disease Detection Model
+
+### Model Details
+- **13 Disease Classes** - Trained to identify common plant diseases
+- **Custom Dataset** - Curated specifically for agricultural conditions
+- **Hugging Face Integration** - Hosted for easy API access
+- **Real-time Analysis** - Quick disease identification from uploaded plant photos
+
+### Supported Disease Classes
+The model can detect 13 different plant diseases across various crops, providing:
+- Disease identification
+- Confidence scores
+- Treatment recommendations via AI chat integration
+
+## Response Formats
+
+### Successful Crop Addition
+```json
+{
+  "message": "Crop(s) added successfully",
+  "userId": "user123",
+  "cropsAdded": [
+    {
+      "cropId": "generated_uuid",
+      "data": {
+        "name": "Tomato",
+        "type": "Vegetable",
+        "area": "2 acres",
+        "sowedDate": "2024-01-15",
+        "timestamp": "2024-01-15T10:30:00"
+      }
+    }
+  ]
+}
+```
+
+### Disease Detection Response
+```json
+{
+  "success": true,
+  "disease_detected": "Tomato Late Blight",
+  "confidence": 0.89,
+  "chat_response": "AI-generated treatment advice",
+  "chat_id": "generated_chat_id"
+}
+```
+
+### Daily Suggestion Response
 ```json
 {
   "success": true,
   "suggestion": {
-    "heading": "Sunny day ahead ☀️",
-    "body": "Did you water your potato? It's going to be 32°C today!"
+    "heading": "Morning Farm Check",
+    "body": "Check your tomato plants for early signs of blight - humidity is 75% today which increases disease risk."
   }
 }
 ```
 
-### Add Crop
-```bash
-POST /addCrop
-{
-  "user_id": "123",
-  "cropData": [{
-    "name": "Tomato",
-    "type": "vegetable",
-    "area": "2",
-    "sowedDate": "2024-01-15"
-  }]
-}
-```
-
-### Chat
-```bash
-POST /chat
-{
-  "user_id": "123",
-  "message": "How do I treat tomato blight?"
-}
-```
-
-## 🔧 Plant Disease Detection
-
-Supports detection of:
-- Tomato diseases (Early blight, Late blight, Leaf mold, etc.)
-- Potato diseases (Early blight, Late blight)
-- Pepper diseases (Bacterial spot)
-
-## 🌤️ Weather Integration
-
-- Fetches real-time weather data
-- Provides 24-hour forecasts
-- Integrates weather conditions into farming suggestions
-
-## 🏃‍♂️ Running the Server
-
-```bash
-python app.py
-```
-
-Server runs on `http://localhost:5000`
-
-## 📊 Database Structure
+## Database Structure
 
 ```
 users/
   {userId}/
     crops/
-      {cropId}/
-        - name, type, area, sowedDate
+      {cropId}
+        - name: string
+        - type: string
+        - area: string
+        - sowedDate: string
+        - timestamp: datetime
     chats/
-      {chatId}/
-        - messages[], createdAt, lastMessage
+      {chatId}
+        - messages: array
+        - createdAt: datetime
+        - lastMessage: string
+        - updatedAt: datetime
+    profile/
+      info
+        - name: string
+        - phone: string
+        - location: string
+        - language: string
+        - profilePhoto: string
 ```
 
-## 🔒 Authentication
+## Dependencies
 
-- Expects `user_id` parameter in requests
-- Integrates with existing login systems
-- No user creation handled by this backend
+```txt
+flask==2.3.3
+flask-cors==4.0.0
+google-generativeai==0.3.0
+firebase-admin==6.2.0
+requests==2.31.0
+python-dotenv==1.0.0
+gunicorn==21.2.0
+```
 
-## 🌟 Key Features
+## Configuration
 
-- **Smart Suggestions**: Weather-aware farming recommendations
-- **AI Chat**: Contextual agricultural advice
-- **Disease Detection**: Instant plant health analysis
-- **Crop Tracking**: Monitor your crops' growth stages
-- **Friendly Interface**: Conversational daily tips
+### Environment Variables
+```env
+# AI Services
+GEMINI_API_KEY=your_gemini_api_key_here
+HF_MODEL_API_URL=https://your-custom-model-endpoint.com
+
+# Weather Service
+OPENWEATHER_API_KEY=your_openweather_api_key_here
+
+# Database
+FIREBASE_KEY={"type":"service_account","project_id":"..."}
+```
+
+### Default Settings
+- Default location: Agra, Uttar Pradesh (27.1767, 78.0081)
+- Request timeout: 30 seconds for external APIs
+- Auto-create Firebase collections
+
+## Error Handling
+
+Comprehensive error handling for:
+- Invalid user IDs and missing parameters
+- External API failures (Gemini, OpenWeather, Custom Model)
+- Database connection issues
+- Image processing errors
+- Non-plant image detection
+
+## What I Learned
+
+### Technical Skills
+- Flask API development and deployment
+- AI model integration and API design
+- Cloud database management with Firebase
+- Weather API integration and data processing
+- Image processing and computer vision basics
+- Production deployment on cloud platforms
+
+### Agricultural Technology
+- Plant disease identification challenges
+- Weather impact on farming decisions
+- Digital crop management systems
+- AI-powered agricultural assistance
+
+## Future Enhancements
+
+- Mobile app frontend
+- Additional disease classes for the model
+- Crop yield prediction features
+- Multi-language support
+- Advanced analytics dashboard
+- Community features for hobby farmers
+
+## Deployment Notes
+
+### Render Configuration
+- Build Command: `pip install -r requirements.txt`
+- Start Command: `python app.py`
+- Environment: Python 3.8+
+- Auto-deploy: Enabled from main branch
+
+### Production Considerations
+- Uses Gunicorn WSGI server
+- Health checks via `/health` endpoint
+- Environment variables securely stored
+- CORS configured for frontend integration
+
+## Personal Project Notes
+
+**This is a hobby project built for learning!**
+
+- Exploring agricultural AI applications
+- Custom disease detection model training
+- Learning cloud deployment and API design
+- Not intended for commercial use
 
 ---
 
-🚀 Ready to revolutionize your farming experience!
+*A personal exploration of AI in agriculture* 🌾💻
