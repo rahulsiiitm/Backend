@@ -273,7 +273,7 @@ Format:
 """
 
 
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-2.5-flash')
         response = model.generate_content(prompt)
         
         try:
@@ -423,7 +423,7 @@ def medical_chat():
         Respond helpfully but always remind users to consult doctors for serious concerns.
         """
 
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-2.5-flash')
         response = model.generate_content(prompt)
         bot_response = response.text
         
@@ -473,7 +473,7 @@ def analyze_image():
 
         try:
             image_file.seek(0)
-            model = genai.GenerativeModel('gemini-1.5-flash')
+            model = genai.GenerativeModel('gemini-2.5-flash')
             
             image_data = image_file.read()
             image_file.seek(0)
@@ -559,7 +559,7 @@ def analyze_image():
             """
             
             try:
-                model = genai.GenerativeModel('gemini-1.5-flash')
+                model = genai.GenerativeModel('gemini-2.5-flash')
                 response = model.generate_content(prompt)
                 gemini_explanation = response.text
             except Exception as e:
