@@ -43,30 +43,30 @@ print("✅ APIs configured successfully")
 # =======================
 # KEEP-ALIVE FUNCTIONALITY
 # =======================
-def keep_alive():
-    """Background thread to ping server every 14 minutes"""
-    render_url = os.environ.get('RENDER_EXTERNAL_URL')  # Render sets this automatically
+# def keep_alive():
+#     """Background thread to ping server every 14 minutes"""
+#     render_url = os.environ.get('RENDER_EXTERNAL_URL')  # Render sets this automatically
     
-    if not render_url:
-        print("⚠️  RENDER_EXTERNAL_URL not found - keep-alive disabled")
-        return
+#     if not render_url:
+#         print("⚠️  RENDER_EXTERNAL_URL not found - keep-alive disabled")
+#         return
     
-    while True:
-        try:
-            time.sleep(720)  # 12 minutes (720 seconds)
-            response = requests.get(f"{render_url}/health", timeout=10)
-            if response.status_code == 200:
-                print(f"✅ Keep-alive ping successful at {datetime.now().strftime('%H:%M:%S')}")
-            else:
-                print(f"⚠️  Keep-alive ping returned status {response.status_code}")
-        except Exception as e:
-            print(f"❌ Keep-alive ping failed: {e}")
+#     while True:
+#         try:
+#             time.sleep(720)  # 12 minutes (720 seconds)
+#             response = requests.get(f"{render_url}/health", timeout=10)
+#             if response.status_code == 200:
+#                 print(f"✅ Keep-alive ping successful at {datetime.now().strftime('%H:%M:%S')}")
+#             else:
+#                 print(f"⚠️  Keep-alive ping returned status {response.status_code}")
+#         except Exception as e:
+#             print(f"❌ Keep-alive ping failed: {e}")
 
-# Start keep-alive thread
-def start_keep_alive():
-    thread = Thread(target=keep_alive, daemon=True)
-    thread.start()
-    print("🔄 Keep-alive thread started")
+# # Start keep-alive thread
+# def start_keep_alive():
+#     thread = Thread(target=keep_alive, daemon=True)
+#     thread.start()
+#     print("🔄 Keep-alive thread started")
 
 # Utility functions
 def validate_user_id(user_id):
