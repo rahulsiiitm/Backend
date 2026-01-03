@@ -9,8 +9,9 @@ from firebase_admin import credentials, firestore
 import uuid
 from dotenv import load_dotenv
 import json
-from threading import Thread
-import time
+# from threading import Thread
+# import time
+from flask_cors import CORS
 
 load_dotenv()
 
