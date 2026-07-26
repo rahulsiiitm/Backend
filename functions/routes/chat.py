@@ -1,24 +1,90 @@
+import uuid
+import google.generativeai as genai
 from flask import Blueprint, request, jsonify
 from datetime import datetime
 from google.cloud import firestore
-from config import db
+from config import db, GEMINI_API_KEY
 from utils import validate_user_id, update_user_activity
 
 chat_bp = Blueprint('chat', __name__)
 
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+
 @chat_bp.route('/chat', methods=['POST'])
 def chat():
-    # Simplistic chat endpoint, the real logic involves Gemini but let's keep it minimal for now
     try:
-        data = request.json
-        user_id = data.get('userId')
+        data = request.get_json()
+        message = data.get('message', '')
+        user_id = data.get('user_id') or data.get('userId')
+        chat_id = data.get('chat_id') or data.get('chatId')
+        
         if not validate_user_id(user_id):
-            return jsonify({"error": "Valid userId is required"}), 400
+            return jsonify({'error': 'Valid user_id is required'}), 400
             
+        if not message:
+            return jsonify({'error': 'No message provided'}), 400
+        
         update_user_activity(user_id)
-        return jsonify({"success": True, "response": "Chat logic refactored. Please implement full gemini logic."})
+        
+        history = []
+        is_new_chat = False
+        
+        if chat_id:
+            chat_doc = db.collection("users").document(user_id).collection("chats").document(chat_id).get()
+            if chat_doc.exists:
+                messages = chat_doc.to_dict().get('messages', [])
+                history = [f"{msg['sender']}: {msg['message']}" for msg in messages[-5:]]
+            else:
+                chat_id = None
+        
+        if not chat_id:
+            chat_id = str(uuid.uuid4())
+            is_new_chat = True
+
+        prompt = f"""
+        You are a friendly agricultural medical assistant. Answer health questions naturally, engage with the user but keep the text short and clear.
+
+        Previous conversation: {history}
+
+        User: {message}
+        
+        Respond helpfully but always remind users to consult doctors for serious concerns.
+        """
+
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        response = model.generate_content(prompt)
+        bot_response = response.text
+        
+        message_data = [
+            {"sender": "user", "message": message, "timestamp": datetime.now()},
+            {"sender": "bot", "message": bot_response, "timestamp": datetime.now()}
+        ]
+        
+        if is_new_chat:
+            db.collection("users").document(user_id).collection("chats").document(chat_id).set({
+                "createdAt": datetime.now(),
+                "lastMessage": bot_response,
+                "updatedAt": datetime.now(),
+                "messages": message_data
+            })
+        else:
+            db.collection("users").document(user_id).collection("chats").document(chat_id).update({
+                "lastMessage": bot_response,
+                "updatedAt": datetime.now(),
+                "messages": firestore.ArrayUnion(message_data)
+            })
+        
+        return jsonify({
+            'success': True,
+            'response': bot_response,
+            'chatId': chat_id,
+            'userId': user_id,
+            'is_new_chat': is_new_chat
+        })
+        
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({'error': str(e)}), 500
 
 @chat_bp.route('/getChats', methods=['GET'])
 def get_chats():
