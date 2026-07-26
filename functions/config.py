@@ -9,10 +9,19 @@ load_dotenv()
 # Firebase Init
 if not firebase_admin._apps:
     try:
-        cred = credentials.Certificate('serviceAccountKey.json')
-        firebase_admin.initialize_app(cred)
-    except FileNotFoundError:
-        print("Warning: serviceAccountKey.json not found.")
+        firebase_key_json = os.environ.get('FIREBASE_KEY')
+        if firebase_key_json:
+            import json
+            cred_dict = json.loads(firebase_key_json)
+            cred = credentials.Certificate(cred_dict)
+            firebase_admin.initialize_app(cred)
+        else:
+            cred = credentials.Certificate('serviceAccountKey.json')
+            firebase_admin.initialize_app(cred)
+    except Exception as e:
+        print(f"Failed to initialize Firebase: {e}")
+        raise
+
 db = firestore.client()
 
 # Gemini Init
